@@ -56,3 +56,36 @@ Token maps for MTP (FP8 off), output tok/s: full 102.9/87.5/106.1, 16k 115.9/100
   inferred from the load path; the values were not read back at runtime. The
   "Defaulting to scaling factors of 1.0" warning only refers to
   `--quantization-param-path`.
+
+## Multi-user
+
+Presets `M` (MTP) and `MD` (DFlash2), with `USERS=4`. Both use `extra_buffer_lazy`,
+`SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1`, `--max-mamba-cache-size 12`, 2048-token prefill chunks,
+and `--disable-prefill-cuda-graph`. Prefill graphs OOM at 0.90 with 4 users.
+
+| Config | KV pool | S1 c1 | S1 c2 | S1 c4 |
+|---|---|---|---|---|
+| MTP 3/1/4, FP8 draft, 32k map | 333k tokens | 125.6 | 209.9 (TPOT 8.2 ms) | 330.1 (TPOT 9.8 ms) |
+| DFlash2, FP8 draft, 64k map | 128k tokens | 161.2 | 229.1 (TPOT 6.9 ms) | 308.2 (TPOT 10.1 ms) |
+
+- DFlash2 is fastest for 1-2 users. Its verify intermediates (2.8 GB for 4 x 8 tokens) and
+  draft weights leave only 128k KV tokens, so 4 x 80k users only fit with MTP.
+- `--enable-linear-replayssm-spec` is KDA-only for DFLASH, so it does not apply to this
+  GDN model.
+- **Multi-turn shared prefix (S4)** is limited by the mamba state slots. A hit needs a saved
+  state at the prefix boundary; those exist at chunk boundaries and at prompt end.
+  - Sequential probes do hit: a shared 16k prefix gets 14,336 cached, a multi-turn
+    continuation gets 16,256.
+  - With 4 running requests and 12 slots, most S4 turns re-prefill (mean TTFT 11.2 s).
+    Going to 24 slots roughly doubles the hits (mean TTFT 8.9 s) but costs 56k KV tokens.
+
+## Accuracy (GSM8K, 250 examples, greedy, thinking off, 4 concurrent)
+
+| Server | Score | Eval wall time | Output tok/s |
+|---|---|---|---|
+| upstream `main`, MTP 4-user config | 0.968 | 240.9 s | 378 |
+| this branch, MTP + FP8 draft + 32k map | 0.968 (rerun 0.972) | 206.5 s | 442 |
+
+Upstream vs branch: 214/250 responses byte-identical. The branch against itself: 244/250.
+The extra divergence comes from BF16 reduction order (tiny_gemm for `in_proj_ba`) and from
+different verify batch shapes. Accuracy is unchanged.
