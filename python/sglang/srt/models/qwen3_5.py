@@ -2505,6 +2505,9 @@ class Qwen3_5ForConditionalGeneration(Qwen3VLForConditionalGeneration):
                 continue
             if "mtp" in name:
                 continue
+            # --language-model-only never builds the vision tower.
+            if self.visual is None and "visual" in name:
+                continue
             if name.startswith("language_model."):
                 # A bare Qwen3_5Model save, which has no LM head of its own.
                 name = "model." + name
@@ -2810,6 +2813,9 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
             if "rotary_emb.inv_freq" in name:
                 continue
             if "mtp" in name:
+                continue
+            # --language-model-only never builds the vision tower.
+            if self.visual is None and "visual" in name:
                 continue
             if "language_model" in name:
                 name = name.replace(r"model.language_model.", r"model.")
