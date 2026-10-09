@@ -24,7 +24,7 @@ mtp=(
 case "$preset" in
   A) args=(--chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer
            --mem-fraction-static 0.90 --max-running-requests 1 --max-mamba-cache-size 5
-           --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 1 "${mtp[@]}") ;;
+           $([ "${PREFILL_GRAPH:-0}" = 1 ] || echo --disable-prefill-cuda-graph) --cuda-graph-max-bs-decode 1 "${mtp[@]}") ;;
   nospec) args=(--chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer
            --mem-fraction-static 0.90 --max-running-requests 1 --max-mamba-cache-size 5
            --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 1) ;;
