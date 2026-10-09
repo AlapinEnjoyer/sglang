@@ -89,6 +89,7 @@ from sglang.srt.runtime_context import get_flags, get_parallel, get_platform
 from sglang.srt.utils import (
     ceil_align,
     cpu_has_amx_support,
+    get_device_sm,
     is_cpu,
     is_cuda,
     is_gfx95_supported,
@@ -127,6 +128,8 @@ _cpu_has_amx_support = cpu_has_amx_support()
 _is_hip = is_hip()
 _is_gfx95_supported = is_gfx95_supported()
 _is_fp8_fnuz = is_fp8_fnuz()
+# Triton only lowers fp8e4nv (float8_e4m3fn) on SM89+; SM8x must quantize eagerly.
+_triton_has_fp8e4nv = _is_hip or (_is_cuda and get_device_sm() >= 89)
 # `SGLANG_AITER_KV_CACHE_LAYOUT` is only meaningful on the ROCm AITER backend
 # (HIP + --enable-aiter / SGLANG_USE_AITER=1). On any other platform / backend
 # the SHUFFLE 5D pool layout has no consumer kernels, so the env var is
@@ -2200,6 +2203,7 @@ def _set_mha_kv_buffer_prefix_valid(
         and pool.dtype == fp8_dtype
         and fused_k_scale is not None
         and fused_v_scale is not None
+        and _triton_has_fp8e4nv
     ):
         _set_kv_buffer_prefix_valid_impl_fp8(
             cache_k,
@@ -2216,12 +2220,14 @@ def _set_mha_kv_buffer_prefix_valid(
         )
         return
 
-    # fallback: eager quantization
+    # fallback: eager quantization, with the same scales the fused kernel uses
     if cache_k.dtype != pool.dtype:
-        if k_scale is not None:
-            cache_k.div_(k_scale)
-        if v_scale is not None:
-            cache_v.div_(v_scale)
+        k_div = k_scale if k_scale is not None else fused_k_scale
+        v_div = v_scale if v_scale is not None else fused_v_scale
+        if k_div is not None:
+            cache_k.div_(k_div)
+        if v_div is not None:
+            cache_v.div_(v_div)
         if pool.dtype == fp8_dtype:
             # Saturate like the fused kernel above; see saturate_to_fp8_range.
             cache_k = saturate_to_fp8_range(cache_k, pool.dtype)
