@@ -1,6 +1,6 @@
 # Handoff: SGLang on Ampere for Swift-1.5-Qwen3.8-27B (INT4)
 
-- **Branch:** `ampere-opt`, forked from `main` at `14e3414513`. It has 15 commits and has not been pushed.
+- **Branch:** `ampere-opt`, forked from `main` at `14e3414513`. It has 17 commits and has not been pushed.
 - **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9.
 - **Hardware:** 2x RTX A4500 (20 GB, SM86, 46 SMs), joined by an NVLink bridge (NV4).
 - **Model:** `/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4`.
@@ -18,13 +18,16 @@ Results from the old `../inference/sglang-inf` folder came from an older sglang 
 
 **Single user** (output tok/s; accept length in parentheses; TTFT for the prefill rows):
 
-| Scenario | Your original command (MTP 3/1/4, BF16 draft) | `best1` (DFlash2 + FP8 draft + 64k hot vocab + ReplaySSM) |
-|---|---|---|
-| S1: 1k in / 1k out | 95.3 (2.99) | **173.0** (4.29), +82% |
-| S5: ShareGPT chat, 512 out | 82.8 (2.60) | **138.0** (3.39), +67% |
-| S6: HumanEval/MBPP chat, 512 out | 106.1 (3.09)¹ | **157.5** (3.76), +48% |
-| S2b: 8k prefill TTFT | 3.88 s | **3.61 s**, -7% |
-| S2: 32k prefill TTFT | 17.78 s | **16.29 s**, -8% |
+| Scenario | Your original command (MTP 3/1/4, BF16 draft) | `best1` (MTP + FP8 draft + 32k hot vocab + ReplaySSM) | `dflash1` (DFlash2 + FP8 draft + 64k hot vocab + ReplaySSM) |
+|---|---|---|---|
+| S1: 1k in / 1k out | 95.3 (2.99) | **123.5** (2.76), +30% | 173.0 (4.29), +82% |
+| S5: ShareGPT chat, 512 out | 82.8 (2.60) | **110.9** (2.48), +34% | 138.0 (3.39), +67% |
+| S6: HumanEval/MBPP chat, 512 out | 106.1 (3.09)¹ | **137.5** (3.02), +30% | 157.5 (3.76), +48% |
+| KV pool (tokens) | - | **432k** | 165k with default mamba slots |
+| S2b: 8k prefill TTFT | 3.88 s | 3.61 s, -7% (both) | |
+| S2: 32k prefill TTFT | 17.78 s | 16.29 s, -8% (both) | |
+
+`best1` is the single-user recommendation: its KV pool covers the full 262k context with room to spare. `dflash1` decodes faster but leaves far less KV. Its draft weights take 1.6 GB per GPU, and its draft KV is sized for the full context although the draft only attends to the last 2048 tokens.
 
 ¹ This S6 baseline already includes the first fix (tiny_gemm). S6 did not exist yet when the pure-upstream baseline was measured.
 
@@ -35,6 +38,8 @@ Results from the old `../inference/sglang-inf` folder came from an older sglang 
 | KV pool | 411k tokens, enough for 4 users x 80k |
 | 4 concurrent users, 1k / 1k | 360.6 tok/s total, TPOT 9.2 ms |
 | 4 concurrent users, 16k prompts / 1k out | 86.2 tok/s total (prefill-dominated) |
+
+**Output quality, sampled and multi-turn:** see section 4b. No config differs from non-speculative upstream decoding.
 
 **Accuracy** (GSM8K, 250 examples, greedy, thinking off):
 
@@ -54,10 +59,12 @@ All of these are within noise; one question is 0.4%.
 
 ```bash
 cd /home/ubuntu/experiments/sglang
-benchmark/ampere_qwen38/serve.sh best1          # single user, best decode (DFlash2)
+benchmark/ampere_qwen38/serve.sh best1          # single user (MTP), 432k-token KV pool
+benchmark/ampere_qwen38/serve.sh dflash1        # single user, fastest decode (DFlash2), small KV pool
 benchmark/ampere_qwen38/serve.sh best4          # 4 users x ~80k context (MTP)
 benchmark/ampere_qwen38/serve.sh A              # your original command (reference)
-# Add --language-model-only to any preset for text-only serving (frees 0.45 GB/GPU).
+# LM_ONLY=1 adds --language-model-only (text only, frees 0.45 GB/GPU); REPLAY=0 drops ReplaySSM.
+uv run --active python benchmark/ampere_qwen38/quality_ab.py --help   # output-quality A/B (section 4b)
 
 benchmark/ampere_qwen38/restart.sh <logname> <preset> [extra args]   # stop, relaunch, wait for ready
 benchmark/ampere_qwen38/bench.sh <tag> S1 S5 S6 S2b S2               # results appended to results/<tag>.jsonl
@@ -81,15 +88,16 @@ The `best1` launch command, spelled out:
 ```bash
 sglang serve --model-path $MODEL --served-model-name local --tp-size 2 --context-length 262144 \
   --kv-cache-dtype fp8_e4m3 --chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer \
-  --mem-fraction-static 0.90 --max-running-requests 1 --max-mamba-cache-size 5 \
+  --mem-fraction-static 0.90 --max-running-requests 1 --max-mamba-cache-size 8 \
   --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 1 \
-  --speculative-algorithm DFLASH --speculative-num-draft-tokens 8 \
-  --speculative-draft-model-path /home/ubuntu/experiments/inference/models/Qwen3.8-27B-DFlash2 \
-  --speculative-draft-model-quantization fp8 \
-  --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_64k.pt \
+  --speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1 \
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8 \
+  --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt \
   --enable-linear-replayssm-spec \
   --reasoning-parser qwen3 --tool-call-parser qwen3_coder --host 0.0.0.0 --port 8000
 ```
+
+Always set `--max-mamba-cache-size`. Left unset with `--max-running-requests 1`, sglang sized 39 mamba state slots, which took 2.8 GB per GPU out of the KV pool.
 
 ---
 
@@ -207,7 +215,8 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 
   | File | Purpose |
   |---|---|
-  | `serve.sh` | presets A, nospec, B, dflash, M, MD, best1, best4; env knobs `DRAFT_QUANT`, `USERS`, `CHUNK`, `MEM_FRAC`, `PREFILL_GRAPH` |
+  | `serve.sh` | presets A, nospec, B, dflash, M, MD, best1, dflash1, best4; env knobs `DRAFT_QUANT`, `USERS`, `CHUNK`, `MEM_FRAC`, `PREFILL_GRAPH`, `LM_ONLY`, `REPLAY` |
+  | `quality_ab.py` | output-quality A/B: generate on a config, teacher-force score on a reference server (NLL, greedy top-1, divergence) |
   | `restart.sh`, `wait_ready.sh` | server lifecycle |
   | `bench.sh` | the scenarios listed in section 2 |
   | `bench_marlin_shapes.py` | Marlin vs cuBLAS on every per-rank TP2 shape |
@@ -237,6 +246,23 @@ These are negative or neutral results, recorded so they don't get re-tried blind
 - **Multi-turn prefix caching works when requests arrive one after another.**
   - A 16k shared prefix hits 14,336 tokens, and a multi-turn continuation hits 16,256.
   - With 4 concurrent users the hit rate is bounded by mamba state slots. Going from 12 to 24 slots roughly doubles the hits.
+
+### 4b. Output quality A/B
+
+This was prompted by a report that `dflash1` felt worse with sampling, thinking and multi-turn chat.
+- **Setup:** `benchmark/ampere_qwen38/quality_ab.py` ran 32 single-turn prompts and 6 three-turn conversations, with thinking on. Turns 2 and 3 hit the prefix cache.
+- **Scoring:** outputs were teacher-forced on upstream `main` without speculation. NLL is per output token; top-1 is the share of greedy tokens equal to the reference argmax.
+
+| Config | Sampled NLL/token [95% CI] | Greedy top-1 |
+|---|---|---|
+| upstream, no spec (reference) | 0.504 [0.452, 0.555] | 99.00% (self) |
+| upstream MTP / upstream DFlash2 | 0.479 / 0.476 | 99.09% / 99.01% |
+| `best1` / same with radix cache off | 0.471 / - | 98.99% / 98.96% |
+| `dflash1` without / with ReplaySSM | 0.496 / 0.482 | 98.96% / 99.04% |
+| `dflash1` with ReplaySSM, radix cache off | - | 98.94% |
+
+- **Nothing is lossy, beyond noise.** That includes the DFlash + ReplaySSM routing added on this branch, and the outputs after prefix-cache hits.
+- **Greedy decoding is not run-to-run reproducible here.** The same config with the cache on and off first diverges at a median of about 125 tokens on identical uncached prompts. Differences between single sampled chats are expected and do not indicate a quality loss.
 
 ---
 

@@ -266,12 +266,20 @@ row back to Auto.
     concurrent requests.
   - **Text-only serving:** add `--language-model-only` when you serve only text. It
     skips the vision tower and frees 0.45GB per GPU.
+  - **Mamba state slots:** set `--max-mamba-cache-size` (8 for one user, about 3 per
+    concurrent user). Left unset at `--max-running-requests 1`, it sized 39 slots,
+    2.8GB per GPU taken from the KV pool.
+  
+  For one user, MTP + token map + FP8 draft + ReplaySSM with 8 slots gives a
+  432k-token KV pool. DFLASH2 decodes faster but its draft weights and full-length
+  draft KV cut the pool to about 165k tokens.
   
   Prefill chunks of 2048 or more tokens switch from Marlin to dequant + cuBLAS on
   SM8x (`SGLANG_MARLIN_DEQUANT_GEMM_MIN_M`, 0 disables). Measured single-user
-  decode, 1k in / 1k out: 95 tok/s with the plain MTP 3/1/4 recipe, 126 tok/s with
-  MTP + token map + FP8 draft, and 172 tok/s with DFLASH2 + 64k token map + FP8 draft
-  + ReplaySSM.
+  decode, 1k in / 1k out: 95 tok/s with the plain MTP 3/1/4 recipe, 124 tok/s with
+  MTP + token map + FP8 draft + ReplaySSM, and 172 tok/s with DFLASH2 + 64k token map
+  + FP8 draft + ReplaySSM. Sampled and greedy outputs of all of these score the same
+  NLL and top-1 agreement as non-speculative upstream decoding.
   Measured 32k-token TTFT is 16.2s. At 4 concurrent users, DFLASH2 reaches 372
   tok/s with a 269k-token KV pool, and MTP reaches 367 tok/s with a 423k-token
   pool. Only MTP holds four 80k-token requests. Full numbers are in

@@ -128,3 +128,31 @@ the DFLASH commit through the generic replay commit.
 - The prefix hits are exact: 29,952 of 30,000 tokens.
 - Long-context attention with fp8 KV is compute-bound on SM86 (FlashInfer about 42-45 TFLOPS,
   against 57-62 TFLOPS with bf16 KV), because the fp8 to bf16 dequant sits in the inner loop.
+
+## Output quality A/B (sampling + thinking, multi-turn with cache hits)
+
+`quality_ab.py` ran 32 single-turn prompts (ShareGPT chat and code) and 6 three-turn conversations, with thinking on and up to 1024 output tokens. Turns 2 and 3 hit the mamba prefix cache.
+- **Sampled runs** use the model's defaults: temperature 1.0, top_k 20, top_p 0.95.
+- **Scoring:** every output is teacher-forced on upstream `main` without speculation. NLL is the mean negative log-likelihood per output token. Top-1 is the share of greedy tokens equal to the reference argmax.
+
+| Config | Sampled NLL/token [95% CI] | Greedy NLL/token | Greedy top-1 |
+|---|---|---|---|
+| upstream, no spec (reference) | 0.504 [0.452, 0.555] | 0.233 | 99.00% (self-scored) |
+| upstream MTP 3/1/4, BF16 draft | 0.479 [0.429, 0.531] | 0.221 | 99.09% |
+| upstream DFlash2, BF16 draft | 0.476 [0.433, 0.518] | 0.237 | 99.01% |
+| branch `best1` (MTP, FP8 draft, 32k map, ReplaySSM) | 0.471 [0.422, 0.517] | 0.242 | 98.99% |
+| ...with `--disable-radix-cache` | - | 0.240 | 98.96% |
+| branch `dflash1` with `REPLAY=0` | 0.496 [0.449, 0.541] | 0.245 | 98.96% |
+| branch `dflash1` (DFlash2, FP8 draft, 64k map, ReplaySSM) | 0.482 [0.432, 0.531] | 0.234 | 99.04% |
+| ...with `--disable-radix-cache` | - | 0.235 | 98.94% |
+
+- No config differs from the reference beyond noise, including after prefix-cache hits.
+- **Greedy decoding is not reproducible run to run on this setup.** The same config with the cache on and off first diverges at a median of about 125 tokens, and as early as token 7, on identical uncached prompts. Early divergence between configs is therefore not evidence of a bug.
+
+**`best1` is now MTP.** Single user, output tok/s with accept length:
+
+| Config | KV pool | S1 | S5 | S6 |
+|---|---|---|---|---|
+| MTP, FP8 draft, 32k map, ReplaySSM, 8 slots | 432k tokens | 123.5 (2.76) | 110.9 (2.48) | 137.5 (3.02) |
+| `dflash1`, with 39 default slots (no `--max-mamba-cache-size`) | 165k tokens | - | - | - |
+| `dflash1`, 5 slots (previous `best1`) | not recorded | 173.0 (4.29) | 138.0 (3.39) | 157.5 (3.76) |
