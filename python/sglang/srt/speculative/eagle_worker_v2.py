@@ -10,6 +10,7 @@ from sglang.kernels.ops.speculative.topk1 import (
     draft_topk1_postprocess,
 )
 from sglang.srt.configs.model_config import get_dsa_mtp_topk_width
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.environ import envs
 from sglang.srt.kv_canary.runner.canary_manager import context_tuple
 from sglang.srt.layers.attention.flashinfer_backend import FlashInferAttnBackend
@@ -112,6 +113,7 @@ from sglang.srt.speculative.spec_utils import (
     renorm_draft_probs,
     sample_draft_proposal,
     select_top_k_tokens,
+    shard_hot_token_head,
     simulated_acc_len_generator,
     spec_stage_span,
 )
@@ -375,9 +377,13 @@ class EagleDraftWorker(EagleDraftWorkerBase):
 
         else:
             if self.hot_token_id is not None and head is not None:
-                head = head.clone()
-                self.hot_token_id = self.hot_token_id.to(head.device)
-                head.data = head.data[self.hot_token_id]
+                hot_rows, self.hot_token_id = shard_hot_token_head(
+                    head=head.data,
+                    hot_token_id=self.hot_token_id.to(head.device),
+                    lm_head=target_lm_head,
+                    all_gather=lambda t: tensor_model_parallel_all_gather(t, dim=0),
+                )
+                head = torch.nn.Parameter(hot_rows, requires_grad=False)
 
             # Share the embedding and lm_head
             self.draft_runner.model.set_embed_and_head(embed, head)

@@ -921,6 +921,68 @@ def load_token_map(token_map_path: str) -> List[int]:
     return torch.tensor(hot_token_id, dtype=torch.int64)
 
 
+def shard_hot_token_head(
+    *,
+    head: torch.Tensor,
+    hot_token_id: torch.Tensor,
+    lm_head: Optional[torch.nn.Module],
+    all_gather: Callable[[torch.Tensor], torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Restrict a vocab-parallel lm_head shard to an evenly re-sharded hot vocab.
+
+    Hot tokens cluster in low vocab ids, so slicing each rank's own shard would leave
+    one rank with nearly the whole hot head. Instead the owned hot rows are gathered
+    once and every rank keeps an equal contiguous slice of the sorted hot vocab.
+    ``all_gather`` concatenates a [rows, hidden] tensor across the TP group on dim 0.
+    Returns this rank's hot head rows and the hot vocab in gathered (rank-major) order.
+    """
+    if lm_head is None or lm_head.tp_size == 1:
+        return head[hot_token_id], hot_token_id
+
+    tp_size = lm_head.tp_size
+    ranges = [
+        lm_head._get_indices(
+            lm_head.num_embeddings_padded,
+            lm_head.org_vocab_size_padded,
+            lm_head.num_embeddings,
+            lm_head.org_vocab_size,
+            rank,
+            tp_size,
+        )
+        for rank in range(tp_size)
+    ]
+    hot = sorted(set(hot_token_id.tolist()))
+    # Pad to a multiple of tp_size with real, otherwise-unused ids so no row repeats.
+    hot_set = set(hot)
+    filler = (t for t in range(lm_head.org_vocab_size) if t not in hot_set)
+    hot = sorted(hot + [next(filler) for _ in range(-len(hot) % tp_size)])
+
+    owned = [
+        [t for t in hot if r.org_vocab_start_index <= t < r.org_vocab_end_index]
+        for r in ranges
+    ]
+    max_owned = max(len(o) for o in owned)
+    local_rank = next(
+        i
+        for i, r in enumerate(ranges)
+        if r.org_vocab_start_index == lm_head.shard_indices.org_vocab_start_index
+    )
+    local_start = ranges[local_rank].org_vocab_start_index
+    local_rows = torch.zeros(
+        (max_owned, head.shape[1]), dtype=head.dtype, device=head.device
+    )
+    if owned[local_rank]:
+        idx = torch.tensor(owned[local_rank], device=head.device) - local_start
+        local_rows[: len(owned[local_rank])] = head[idx]
+    gathered = all_gather(local_rows)
+
+    row_of = {t: r * max_owned + j for r, o in enumerate(owned) for j, t in enumerate(o)}
+    per_rank = len(hot) // tp_size
+    my_tokens = hot[local_rank * per_rank : (local_rank + 1) * per_rank]
+    my_rows = gathered[torch.tensor([row_of[t] for t in my_tokens], device=head.device)]
+    return my_rows.contiguous(), torch.tensor(hot, dtype=torch.int64, device=head.device)
+
+
 @contextmanager
 def draft_pp_context():
     # The draft model is one layer and never spans pipeline stages; give it a
