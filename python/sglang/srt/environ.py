@@ -1269,6 +1269,10 @@ class Envs:
     SGLANG_INT4_WEIGHT = EnvBool(False)
     SGLANG_CPU_QUANTIZATION = EnvBool(False)
     SGLANG_FORCE_FP8_MARLIN = EnvBool(False)
+    # Token count at which W4A16 Marlin linears switch to dequant + cuBLAS. Unset
+    # selects 2048 on SM8x and off elsewhere; 0 disables. Costs one dense-weight
+    # scratch buffer (the largest layer) per device.
+    SGLANG_MARLIN_DEQUANT_GEMM_MIN_M = EnvInt(None)
     # Cache BF16 expansions of Hopper group32 FP8 weights for larger GEMMs.
     # Disable to save the additional weight memory or allow online updates.
     SGLANG_OPT_HOPPER_BLOCK_FP8_BF16 = EnvBool(True)

@@ -111,6 +111,7 @@ _TRITON_KERNELS = [
     ("awq_triton", "awq_dequantize_triton"),
     ("rocm_upscale", "upscale"),
     ("rocm_upscale", "upscale_mxfp4"),
+    ("marlin_dequant", "marlin_w4_dequant"),
     ("mxfp8_amd_gfx95", "mxfp8_e4m3_quantize"),
 ]
 for _mod, _fn in _TRITON_KERNELS:

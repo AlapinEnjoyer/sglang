@@ -39,7 +39,9 @@ from sglang.srt.layers.quantization.utils import (
     replace_parameter,
     unpack_cols,
 )
-from sglang.srt.utils import is_cuda
+from sglang.kernels.ops.quantization.marlin_dequant import marlin_w4_dequant
+from sglang.srt.environ import envs
+from sglang.srt.utils import is_cuda, is_sm80_supported
 
 _is_cuda = is_cuda()
 
@@ -231,6 +233,16 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
         # Allocate marlin workspace.
         self.workspace = marlin_make_workspace(device)
 
+        self.dense_gemm_min_m = (
+            _dense_gemm_min_m()
+            if self.quant_type == scalar_types.uint4b8 and not self.has_g_idx
+            else 0
+        )
+        if self.dense_gemm_min_m:
+            # Size the shared scratch while loading so the KV pool sizing sees it.
+            size_k, size_n = c.partition_weight_shape
+            _dense_scratch(device, layer.params_dtype, size_k * size_n)
+
         def _transform_param(
             layer: torch.nn.Module, name: Optional[str], fn: Callable
         ) -> None:
@@ -322,6 +334,17 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
 
         w_q, w_s, w_zp, w_gidx = _get_weight_params(layer)
 
+        if self.dense_gemm_min_m and _use_dense_gemm(x, self.dense_gemm_min_m):
+            size_k, size_n = c.partition_weight_shape
+            dense = marlin_w4_dequant(
+                w_q, w_s, size_k, size_n, self.group_size,
+                out=_dense_scratch(x.device, w_s.dtype, size_k * size_n).view(
+                    size_n, size_k
+                ),
+            )
+            out = torch.nn.functional.linear(x.reshape(-1, size_k), dense, bias)
+            return out.reshape(*x.shape[:-1], size_n)
+
         # `process_weights_after_loading` will ensure w_zp and w_gidx are not
         #  None for marlin
         return apply_gptq_marlin_linear(
@@ -338,6 +361,36 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
             is_k_full=self.is_k_full,
             bias=bias,
         )
+
+
+def _dense_gemm_min_m() -> int:
+    min_m = envs.SGLANG_MARLIN_DEQUANT_GEMM_MIN_M.get()
+    if min_m is None:
+        # Measured on RTX A4500: dequant + cuBLAS overtakes Marlin from ~2k rows.
+        return 2048 if is_sm80_supported() else 0
+    return min_m
+
+
+def _use_dense_gemm(x: torch.Tensor, min_m: int) -> bool:
+    return (
+        x.numel() // x.shape[-1] >= min_m
+        and not torch.compiler.is_compiling()
+        and not torch.cuda.is_current_stream_capturing()
+    )
+
+
+# One dense-weight scratch per (device, dtype), grown to the largest layer at load
+# time and reused by every layer: linears run one at a time on the forward stream.
+_DENSE_SCRATCH: dict = {}
+
+
+def _dense_scratch(device: torch.device, dtype: torch.dtype, numel: int) -> torch.Tensor:
+    key = (device, dtype)
+    buf = _DENSE_SCRATCH.get(key)
+    if buf is None or buf.numel() < numel:
+        buf = torch.empty(numel, dtype=dtype, device=device)
+        _DENSE_SCRATCH[key] = buf
+    return buf[:numel]
 
 
 class XPUCompressedTensorsWNA16(CompressedTensorsWNA16):
