@@ -921,6 +921,9 @@ def load_token_map(token_map_path: str) -> List[int]:
     return torch.tensor(hot_token_id, dtype=torch.int64)
 
 
+_HOT_HEAD_GATHER_CHUNK_ROWS = 4096
+
+
 def shard_hot_token_head(
     *,
     head: torch.Tensor,
@@ -968,19 +971,33 @@ def shard_hot_token_head(
         if r.org_vocab_start_index == lm_head.shard_indices.org_vocab_start_index
     )
     local_start = ranges[local_rank].org_vocab_start_index
-    local_rows = torch.zeros(
-        (max_owned, head.shape[1]), dtype=head.dtype, device=head.device
-    )
-    if owned[local_rank]:
-        idx = torch.tensor(owned[local_rank], device=head.device) - local_start
-        local_rows[: len(owned[local_rank])] = head[idx]
-    gathered = all_gather(local_rows)
-
-    row_of = {t: r * max_owned + j for r, o in enumerate(owned) for j, t in enumerate(o)}
     per_rank = len(hot) // tp_size
     my_tokens = hot[local_rank * per_rank : (local_rank + 1) * per_rank]
-    my_rows = gathered[torch.tensor([row_of[t] for t in my_tokens], device=head.device)]
-    return my_rows.contiguous(), torch.tensor(hot, dtype=torch.int64, device=head.device)
+    # (owner rank, index in owner's list) of each row this rank keeps.
+    owner_pos = {t: (r, j) for r, o in enumerate(owned) for j, t in enumerate(o)}
+    my_rows = torch.empty((per_rank, head.shape[1]), dtype=head.dtype, device=head.device)
+    # Runs after the KV pool is sized, so gather in row chunks to bound the transient.
+    chunk = _HOT_HEAD_GATHER_CHUNK_ROWS
+    mine = owned[local_rank]
+    for c0 in range(0, max_owned, chunk):
+        rows = min(chunk, max_owned - c0)
+        local = torch.zeros((rows, head.shape[1]), dtype=head.dtype, device=head.device)
+        n_local = max(0, min(rows, len(mine) - c0))
+        if n_local > 0:
+            idx = torch.tensor(mine[c0 : c0 + n_local], device=head.device) - local_start
+            local[:n_local] = head[idx]
+        gathered = all_gather(local)
+        dst, src = [], []
+        for i, t in enumerate(my_tokens):
+            r, j = owner_pos[t]
+            if c0 <= j < c0 + rows:
+                dst.append(i)
+                src.append(r * rows + (j - c0))
+        if dst:
+            my_rows[torch.tensor(dst, device=head.device)] = gathered[
+                torch.tensor(src, device=head.device)
+            ]
+    return my_rows, torch.tensor(hot, dtype=torch.int64, device=head.device)
 
 
 @contextmanager

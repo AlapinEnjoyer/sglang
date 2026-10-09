@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Scenario runner against a live server. Usage: bench.sh <tag> <scenario...>
 # Scenarios: S1 (decode, 1k/1k c1), S2 (prefill, 32k/64 c1), S2b (8k/64 c1),
-#            S3c2/S3c4 (16k/1k), S4 (multi-turn shared prefix c4), S5 (sharegpt chat c1).
+#            S3c2/S3c4 (16k/1k), S4 (multi-turn shared prefix c4), S5 (sharegpt chat c1),
+#            S6 (HumanEval/MBPP code chat c1).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 export VIRTUAL_ENV="$REPO/.venv"
@@ -31,6 +32,9 @@ for s in "$@"; do
             --gsp-prompts-per-group 2 --gsp-system-prompt-len 16000 --gsp-question-len 512 \
             --gsp-output-len 512 --gsp-num-turns 4 --max-concurrency 4 ;;
     S5)   run S5 --backend sglang-oai-chat --dataset-name sharegpt --sharegpt-output-len 512 \
+            --num-prompts 12 --max-concurrency 1 ;;
+    S6)   run S6 --backend sglang-oai-chat --dataset-name custom \
+            --dataset-path "$REPO/benchmark/ampere_qwen38/code_prompts.jsonl" --sharegpt-output-len 512 \
             --num-prompts 12 --max-concurrency 1 ;;
     *) echo "unknown scenario $s" >&2 ;;
   esac
