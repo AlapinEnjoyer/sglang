@@ -108,6 +108,7 @@ from sglang.srt.speculative.spec_utils import (
     GrammarTree,
     build_grammar_vocab_mask,
     check_simulate_acc_token_mode,
+    commit_mamba_states_after_verify,
     draft_pp_context,
     draft_tp_context,
     load_token_map,
@@ -234,6 +235,19 @@ def _resolve_dflash_embedding_module(draft_model, target_model):
             )
         return embed_module
     return target_model.get_input_embeddings()
+
+
+def _uses_gdn_replayssm(mamba_pool) -> bool:
+    # Same gates as commit_mamba_states_after_verify; the replay fields exist only
+    # on pools built with speculative state.
+    return (
+        mamba_pool is not None
+        and not getattr(mamba_pool, "replayssm_is_kda", False)
+        and (
+            getattr(mamba_pool, "replayssm_spec_fold", False)
+            or getattr(mamba_pool, "replayssm_cache_base", None) is not None
+        )
+    )
 
 
 def _is_all_greedy(sampling_info) -> bool:
@@ -2241,6 +2255,19 @@ class DFlashWorkerV2(BaseSpecWorker):
             )
 
         model_runner = self.target_worker.model_runner
+        if _uses_gdn_replayssm(getattr(model_runner.req_to_token_pool, "mamba_pool", None)):
+            # GDN ReplaySSM keeps verify drafts in a ring instead of intermediate
+            # states; the generic commit advances or folds it (chain layout).
+            bs = commit_lens.shape[0]
+            commit_mamba_states_after_verify(
+                target_worker=self.target_worker,
+                batch=batch,
+                accept_lens=commit_lens.to(torch.int32),
+                accept_index=commit_lens.view(bs, 1),
+                draft_token_num=int(self.block_size),
+                prepared_step_indices=(last_correct_step_indices, mamba_steps_to_track),
+            )
+            return
         if hasattr(attn_backend, "update_mamba_state_after_mtp_verify"):
             attn_backend.update_mamba_state_after_mtp_verify(
                 last_correct_step_indices=last_correct_step_indices,

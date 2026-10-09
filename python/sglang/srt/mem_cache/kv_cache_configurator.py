@@ -959,17 +959,21 @@ class KVCacheConfigurator:
         return has_window, has_state
 
     def _validate_replay_spec_algorithm(self) -> None:
-        # DSPARK/DFLASH commit routes through the backend fold (KDA-only); a
-        # non-KDA model there would scatter a None intermediate_ssm and crash.
+        # DSPARK commits through the backend fold (KDA-only); DFLASH also routes GDN
+        # rings through the generic replay commit. Any other model would scatter a
+        # None intermediate_ssm and crash.
         _algo = (get_spec().speculative_algorithm or "").upper()
+        _replay_ok = self.hybrid_kda_config is not None or (
+            _algo == "DFLASH" and self.hybrid_gdn_config is not None
+        )
         if (
             get_exec().mamba.enable_linear_replayssm_spec
             and _algo in ("DSPARK", "DFLASH")
-            and self.hybrid_kda_config is None
+            and not _replay_ok
         ):
             raise ValueError(
-                "--enable-linear-replayssm-spec with DSPARK/DFLASH requires a KDA "
-                "model; got a non-KDA model."
+                "--enable-linear-replayssm-spec with DSPARK requires a KDA model, "
+                "and with DFLASH a KDA or GDN model."
             )
 
     def _kv_layer_decls(self) -> tuple:
