@@ -73,6 +73,20 @@ def _mtp_quant_config(quant_config):
         return None
     if is_npu() and get_spec().speculative_draft_model_quantization is None:
         return None
+    # A compressed-tensors checkpoint that keeps the MTP stack in BF16 (via its
+    # ignore list) can opt the draft into online FP8, which runs as Marlin W8A16
+    # on SM8x. Only draft proposals change; the target still verifies.
+    if (
+        quant_config is not None
+        and quant_config.get_name() == "compressed_tensors"
+        and get_spec().speculative_draft_model_quantization == "fp8"
+        and any(
+            pattern.startswith(("re:^mtp", "mtp.")) for pattern in quant_config.ignore
+        )
+    ):
+        from sglang.srt.layers.quantization.fp8 import Fp8Config
+
+        return Fp8Config(activation_scheme="dynamic")
     # Some Quark-quantized Qwen3.5 MXFP4 checkpoints ship the MTP module
     # entirely in bf16, listing every `mtp.*` layer under the quantization
     # exclude list. Skip quantization for those so linear/MoE weight loaders

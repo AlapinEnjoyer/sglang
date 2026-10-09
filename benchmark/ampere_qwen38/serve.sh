@@ -17,7 +17,7 @@ common=(
 )
 mtp=(
   --speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1
-  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization unquant
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization "${DRAFT_QUANT:-unquant}"
 )
 case "$preset" in
   A) args=(--chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer
