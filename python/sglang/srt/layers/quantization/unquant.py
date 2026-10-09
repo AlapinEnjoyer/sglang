@@ -51,6 +51,7 @@ from sglang.srt.utils import (
     is_gfx115_supported,
     is_hip,
     is_npu,
+    is_sm80_supported,
     is_xpu,
     use_intel_amx_backend,
 )
@@ -84,6 +85,37 @@ if _use_aiter:
     from aiter.ops.shuffle import shuffle_weight
     from aiter.ops.triton.gemm_a16w16 import gemm_a16w16 as _aiter_triton_a16w16
     from aiter.tuned_gemm import tgemm
+
+_is_sm8x = _is_cuda and is_sm80_supported()
+
+# Measured on RTX A4500 (SM86): for N <= 256 and M <= 8, cuBLAS picks single-CTA
+# kernels (28us for 5120x48 at M=4) while tiny_gemm reads the weight at ~3.6us.
+_SM8X_TINY_GEMM_MAX_M = 8
+_SM8X_TINY_GEMM_MAX_N = 256
+
+
+def _use_sm8x_tiny_gemm(
+    *, x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor]
+) -> bool:
+    if not _is_sm8x or bias is not None or torch.compiler.is_compiling():
+        return False
+    if not (x.ndim == 2 and x.dtype == torch.bfloat16 and x.is_contiguous()):
+        return False
+    if weight.dtype != torch.bfloat16 or weight.requires_grad:
+        return False
+    n, k = weight.shape
+    if not (0 < x.shape[0] <= _SM8X_TINY_GEMM_MAX_M and n <= _SM8X_TINY_GEMM_MAX_N):
+        return False
+    from sglang.kernels.ops.gemm.tiny_gemm import can_use_tiny_gemm
+
+    return can_use_tiny_gemm(n, k, max_m=_SM8X_TINY_GEMM_MAX_M)
+
+
+def _sm8x_tiny_gemm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    from sglang.kernels.ops.gemm.tiny_gemm import tiny_gemm_bf16
+
+    return tiny_gemm_bf16(x, weight, max_m=_SM8X_TINY_GEMM_MAX_M)
+
 
 # Route supported decode shapes that are absent from the tuned table.
 _A16W16_TRITON_MAX_K = 2048
@@ -838,6 +870,9 @@ class UnquantizedLinearMethod(LinearMethodBase):
                 # keeping the per-shape kernel choice.
                 return bf16_gemm_dispatch(x, layer.weight, bias)
             return _bf16_gemm_dispatch_impl(x, layer.weight, bias)
+
+        if _use_sm8x_tiny_gemm(x=x, weight=layer.weight, bias=bias):
+            return _sm8x_tiny_gemm(x, layer.weight)
 
         return F.linear(x, layer.weight, bias)
 
