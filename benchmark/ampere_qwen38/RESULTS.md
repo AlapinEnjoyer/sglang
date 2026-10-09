@@ -89,3 +89,42 @@ and `--disable-prefill-cuda-graph`. Prefill graphs OOM at 0.90 with 4 users.
 Upstream vs branch: 214/250 responses byte-identical. The branch against itself: 244/250.
 The extra divergence comes from BF16 reduction order (tiny_gemm for `in_proj_ba`) and from
 different verify batch shapes. Accuracy is unchanged.
+
+## ReplaySSM, text-only mode, dense prefill, agent turns
+
+**`--enable-linear-replayssm-spec` (GDN):** keeps verify drafts in a ring, so the intermediate
+SSM cache goes to 0. Before this branch, DFLASH rejected it on GDN models; this branch routes
+the DFLASH commit through the generic replay commit.
+
+| Config | KV pool | c1 | c2 | c4 |
+|---|---|---|---|---|
+| MTP 4-user + replay | 333k -> 423k | 122.9 | - | 330.1 -> 367.1 |
+| DFlash2 4-user + replay | 128k -> 269k | 161.2 -> 173.0 | 229.1 -> 262.8 | 308.2 -> 372.4 |
+
+- DFlash2 + replay at c1 measured S1 172.8, ShareGPT chat 136.9, code 157.3 tok/s.
+- Accept length moves by about +/-5-10% on fixed prompts, because greedy sequences diverge.
+- GSM8K score is 0.964, against 0.968 / 0.972 without replay.
+
+**`--language-model-only`:** this branch adds Qwen3.5 to the allow-list.
+- Weights drop from 9.07 to 8.62 GB per GPU, and the KV pool grows from 422k to 461k tokens.
+  Prefill speed is unchanged.
+- GSM8K is 0.960. It is not bit-identical to the mrope path (129/250 responses match).
+
+**Dequant + cuBLAS for M >= 2048 (SM8x default):**
+- 8k prefill TTFT 3.80 -> 3.48 s; 32k prefill TTFT 17.67 -> 16.24 s (about 8%).
+- The scratch buffer adds 0.21 GB per GPU.
+- Logprob deviation is below this model's own chunk-size noise (0.13 vs 0.19 nats).
+- 8192-token chunks OOM at 0.90.
+
+**Agent turn latency** (cached 30k prefix plus a new delta, MTP, `turn_latency.py`):
+
+| Delta | No prefill graph | Prefill graph <= 1024 tokens (mem 0.86) |
+|---|---|---|
+| 64 | 119 ms | 96 ms |
+| 256 | 234 ms | 237 ms |
+| 1024 | 677 ms | 679 ms |
+| 2048 | 1312 ms | 1331 ms |
+
+- The prefix hits are exact: 29,952 of 30,000 tokens.
+- Long-context attention with fp8 KV is compute-bound on SM86 (FlashInfer about 42-45 TFLOPS,
+  against 57-62 TFLOPS with bf16 KV), because the fp8 to bf16 dequant sits in the inner loop.
