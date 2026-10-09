@@ -18,6 +18,7 @@ from sglang.kernels.ops.speculative.dspark.dspark_accept import (
     accept_sampling,
 )
 from sglang.srt.configs.hybrid_arch import mambaish_config
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import get_dp_tp_group
 from sglang.srt.layers.logits_processor import (
@@ -42,6 +43,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.model_executor.forward_mode import CaptureHiddenMode, ForwardMode
 from sglang.srt.model_executor.model_runner import SamplingPrewarmResult
+from sglang.srt.models.dflash import DFlash2DraftModel
 from sglang.srt.model_executor.runner_utils.pool import (
     disable_graph_pool_borrow,
     graph_pool_borrow_enabled,
@@ -108,6 +110,8 @@ from sglang.srt.speculative.spec_utils import (
     check_simulate_acc_token_mode,
     draft_pp_context,
     draft_tp_context,
+    load_token_map,
+    shard_hot_token_head,
     simulated_acc_len_generator,
 )
 from sglang.srt.utils import async_h2d, is_cuda, is_hip, is_npu, is_xpu
@@ -890,6 +894,34 @@ class DFlashWorkerV2(BaseSpecWorker):
         )
         return result
 
+    def _maybe_bind_hot_candidate_head(self, lm_head) -> None:
+        """Restrict DFlash2 candidate generation to the --speculative-token-map vocab."""
+        token_map = get_spec().speculative_token_map
+        if (
+            token_map is None
+            or not isinstance(self.draft_model, DFlash2DraftModel)
+            or self.draft_model.hot_candidate_head is not None
+            or not is_dense_head_weight(lm_head.weight)
+        ):
+            return
+        weight = lm_head.weight.data
+        hot_rows, hot_ids = shard_hot_token_head(
+            head=weight,
+            hot_token_id=load_token_map(token_map).to(weight.device),
+            lm_head=lm_head,
+            all_gather=lambda t: tensor_model_parallel_all_gather(t, dim=0),
+        )
+        rows = hot_rows.shape[0]
+        rank = self._target_tp_rank if lm_head.tp_size > 1 else 0
+        self.draft_model.set_hot_candidate_head(
+            weight=hot_rows, token_ids=hot_ids[rank * rows : (rank + 1) * rows]
+        )
+        if self._target_tp_rank == 0:
+            logger.info(
+                "DFLASH selector candidates restricted to a %d-token hot vocab.",
+                hot_ids.numel(),
+            )
+
     def _maybe_build_draft_sampler(self):
         def _eager(reason):
             if self._target_tp_rank == 0:
@@ -918,6 +950,7 @@ class DFlashWorkerV2(BaseSpecWorker):
             if not head_supported:
                 return _eager("unsupported quantized lm_head")
             self.draft_model.lm_head = lm_head
+            self._maybe_bind_hot_candidate_head(lm_head)
             if self._target_tp_rank == 0:
                 logger.info(
                     "DFLASH selector decode folded into the draft cuda graph "
@@ -1492,6 +1525,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         draft_model = self.draft_model
         if draft_model.lm_head is None:
             draft_model.lm_head = lm_head
+            self._maybe_bind_hot_candidate_head(lm_head)
 
         draft_hidden = draft_logits_output.hidden_states
         if draft_hidden is None:

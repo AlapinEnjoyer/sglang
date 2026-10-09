@@ -171,6 +171,23 @@ def candidate_topk(
     return torch.gather(gathered_ids, -1, sel).long(), top_vals, lse
 
 
+def hot_candidate_topk(
+    hidden: torch.Tensor, weight: torch.Tensor, token_ids: torch.Tensor, k: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """candidate_topk over this rank's slice of a hot vocab: weight [P, H] holds the
+    target lm_head rows of global ids token_ids [P]. Candidates outside the hot vocab
+    are never proposed; the target still verifies against the full vocabulary."""
+    logits = torch.matmul(hidden.to(weight.dtype), weight.T)
+    vals, idx = _radix_topk(logits, k)
+    ids = token_ids[idx.long()]
+    if get_parallel().tp_size == 1:
+        return ids, vals
+    gathered_vals = tensor_model_parallel_all_gather(vals.float(), dim=-1)
+    gathered_ids = tensor_model_parallel_all_gather(ids, dim=-1)
+    top_vals, sel = torch.topk(gathered_vals, k, dim=-1)
+    return torch.gather(gathered_ids, -1, sel), top_vals
+
+
 def _get_dflash_attention_type(config, *, default: AttentionType) -> AttentionType:
     """Honor explicit causality while preserving legacy layer defaults."""
     text_config = config.get_text_config()
@@ -1494,6 +1511,14 @@ class DFlash2DraftModel(DFlashDraftModel):
         # The draft has no head of its own; the worker points this at the target's
         # before capture.
         self.lm_head: Optional[nn.Module] = None
+        # (rows [P, H], global ids [P]) of this rank's hot-vocab slice, when a
+        # --speculative-token-map restricts candidate generation.
+        self.hot_candidate_head: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+
+    def set_hot_candidate_head(
+        self, *, weight: torch.Tensor, token_ids: torch.Tensor
+    ) -> None:
+        self.hot_candidate_head = (weight, token_ids)
 
     def _transform_unary_logits(self, logits: torch.Tensor) -> torch.Tensor:
         logits = logits.float()
@@ -1510,6 +1535,12 @@ class DFlash2DraftModel(DFlashDraftModel):
         """Top-k base candidates via the target lm_head: hidden [N, H] -> global
         candidate_ids / unary_logits [N, K]."""
         assert self.lm_head is not None, "draft_model.lm_head unset before capture"
+        if self.hot_candidate_head is not None:
+            weight, token_ids = self.hot_candidate_head
+            ids, vals = hot_candidate_topk(
+                hidden, weight, token_ids, self.candidate_selector.top_k
+            )
+            return ids, self._transform_unary_logits(vals)
         ids, vals, _ = candidate_topk(
             hidden, self.lm_head, self.candidate_selector.top_k
         )
