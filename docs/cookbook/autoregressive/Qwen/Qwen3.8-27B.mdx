@@ -251,6 +251,32 @@ row back to Auto.
   decode, unlike the SM120 guidance below), and the FlashInfer GDN prefill
   backend engages by default under them. `--attention-backend fa3` is a valid
   alternative, measured slightly faster at bs=1.
+- **Ampere (SM80 / SM86, e.g. A100, RTX A4500)**: the card has no FP8 or FP4 tensor
+  cores. Serve a W4A16 INT4 (compressed-tensors, group 128) checkpoint, which runs
+  on Marlin. The recipe below was measured on 2x RTX A4500 (20GB, NVLink) at TP2
+  with `--kv-cache-dtype fp8_e4m3`:
+  - **Draft vocabulary:** add `--speculative-token-map` with a hot vocabulary
+    built by `benchmark/ampere_qwen38/build_token_map.py`. Use 32k for MTP and 64k
+    for DFLASH2. The target still verifies against the full vocabulary, so outputs
+    are unchanged.
+  - **Draft precision:** add `--speculative-draft-model-quantization fp8`, which runs
+    the MTP head or the DFlash2 draft as Marlin W8A16.
+  - **Spec memory:** add `--enable-linear-replayssm-spec`. It drops the per-draft-token
+    SSM verify buffers, which take 1.4GB (MTP) to 2.8GB (DFLASH2) per GPU at 4
+    concurrent requests.
+  - **Text-only serving:** add `--language-model-only` when you serve only text. It
+    skips the vision tower and frees 0.45GB per GPU.
+  
+  Prefill chunks of 2048 or more tokens switch from Marlin to dequant + cuBLAS on
+  SM8x (`SGLANG_MARLIN_DEQUANT_GEMM_MIN_M`, 0 disables). Measured single-user
+  decode, 1k in / 1k out: 95 tok/s with the plain MTP 3/1/4 recipe, 126 tok/s with
+  MTP + token map + FP8 draft, and 172 tok/s with DFLASH2 + 64k token map + FP8 draft
+  + ReplaySSM.
+  Measured 32k-token TTFT is 16.2s. At 4 concurrent users, DFLASH2 reaches 372
+  tok/s with a 269k-token KV pool, and MTP reaches 367 tok/s with a 423k-token
+  pool. Only MTP holds four 80k-token requests. Full numbers are in
+  `benchmark/ampere_qwen38/RESULTS.md`. Under sustained prefill the A4500 sits at its
+  200W power cap, so prefill throughput on this card is power-bound.
 - **MTP**: `--speculative-algorithm EAGLE --speculative-num-steps 3
   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4` uses the
   in-checkpoint MTP head. (This recipe was originally documented with `NEXTN`,

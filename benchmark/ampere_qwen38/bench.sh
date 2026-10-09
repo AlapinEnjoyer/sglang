@@ -27,6 +27,7 @@ for s in "$@"; do
     S1c2) run S1c2 "${rnd[@]}" --random-input-len 1024 --random-output-len 1024 --num-prompts 8 --max-concurrency 2 ;;
     S1c4) run S1c4 "${rnd[@]}" --random-input-len 1024 --random-output-len 1024 --num-prompts 12 --max-concurrency 4 ;;
     S2)   run S2 "${rnd[@]}" --random-input-len 32768 --random-output-len 64 --num-prompts 3 --max-concurrency 1 ;;
+    S7)   run S7 "${rnd[@]}" --random-input-len 100000 --random-output-len 256 --num-prompts 2 --max-concurrency 1 ;;
     S2b)  run S2b "${rnd[@]}" --random-input-len 8192 --random-output-len 64 --num-prompts 4 --max-concurrency 1 ;;
     S3c2) run S3c2 "${rnd[@]}" --random-input-len 16384 --random-output-len 1024 --num-prompts 6 --max-concurrency 2 ;;
     S3c4) run S3c4 "${rnd[@]}" --random-input-len 16384 --random-output-len 1024 --num-prompts 8 --max-concurrency 4 ;;
