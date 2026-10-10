@@ -52,10 +52,9 @@ Token maps for MTP (FP8 off), output tok/s: full 102.9/87.5/106.1, 16k 115.9/100
 - **FP8 KV scales.** The checkpoint ships per-layer `k_scale` (about 0.03-0.04) and
   `v_scale` (about 0.02-0.03). `QWEN3_5_KV_SCALE_MAPPER` maps them onto `attn.k_scale`
   and `attn.v_scale`, which the compressed-tensors KV method creates at -1. The load log
-  has no "not found in params_dict" warnings, so the scales appear to load. This is
-  inferred from the load path; the values were not read back at runtime. The
-  "Defaulting to scaling factors of 1.0" warning only refers to
-  `--quantization-param-path`.
+  has no "not found in params_dict" warnings, and the BF16-KV bug below confirms that the
+  scales reach the attention kernels. The "Defaulting to scaling factors of 1.0" warning only
+  refers to `--quantization-param-path`.
 
 ## Multi-user
 
@@ -156,3 +155,66 @@ the DFLASH commit through the generic replay commit.
 | MTP, FP8 draft, 32k map, ReplaySSM, 8 slots | 432k tokens | 123.5 (2.76) | 110.9 (2.48) | 137.5 (3.02) |
 | `dflash1`, with 39 default slots (no `--max-mamba-cache-size`) | 165k tokens | - | - | - |
 | `dflash1`, 5 slots (previous `best1`) | not recorded | 173.0 (4.29) | 138.0 (3.39) | 157.5 (3.76) |
+
+## FP8 checkpoint (`Qwen/Qwen3.8-27B-FP8`)
+
+The official FP8 checkpoint and `orcarouter/Qwen3.8-27B-Uncensored-FP8` (abliterated, same layout) are
+block-FP8: e4m3 weights with 128x128 scale blocks and dynamic activations. Their MTP head is FP8 too.
+`lm_head`, embeddings, vision, norms and `in_proj_a/b` stay BF16, and there are no `k_scale`/`v_scale`
+tensors, so fp8 KV runs at scale 1.0. On SM8x, sglang serves the weights as FP8 Marlin W8A16.
+
+Branch optimizations that apply unchanged: the token map, the shared draft embed/lm_head, `tiny_gemm` for
+`in_proj_ba`, ReplaySSM, `--language-model-only`, and the DFlash hot vocabulary. The checkpoint's own MTP
+is already FP8, so `fp8x1` does not pass `--speculative-draft-model-quantization`.
+
+Preset `fp8x1` (`LM_ONLY=1`, TP2, MTP 3/1/4, 32k map, ReplaySSM, 8 mamba slots, mem 0.92):
+
+| | KV pool | S1 | S5 | S6 | 8k TTFT | 32k TTFT |
+|---|---|---|---|---|---|---|
+| INT4 `best1` (reference) | 437k | 123.6 (2.76) | 110.9 (2.48) | 137.5 (3.02) | 3.61 s | 16.2 s |
+| FP8, Marlin prefill | 125k | 76.9 (2.61) | 73.4 (2.48) | 87.6 (2.91) | 4.67 s | 21.0 s |
+| FP8, dequant + cuBLAS prefill (default) | 114k | - | - | - | 3.58 s | 16.6 s |
+
+- **Decode** is 0.62-0.66x of INT4, the ratio of weight bytes. Acceptance is the same.
+- **KV room:** without `expandable_segments`, the pool was 61k tokens. The draft's embed and lm_head copies
+  (2.5 GB per GPU) are freed when they are shared with the target, but the caching allocator cannot release
+  segments that FP8-repacked MTP weights still occupy. 1.4 GB stayed reserved. `serve.sh` now sets
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`; INT4 `best1` gains 432k -> 437k with S1 unchanged.
+- **Prefill:** FP8 Marlin reaches 51-63 TFLOPS at M >= 2048, against 72-79 for cuBLAS BF16
+  (`bench_marlin_shapes.py --wtype fp8`). Dequant + cuBLAS (`marlin_fp8_dequant`, shared with the W4A16
+  path and `SGLANG_MARLIN_DEQUANT_GEMM_MIN_M`) cuts TTFT by 21-23%. The dequantized weight is
+  bit-identical to fp8 x bf16 scale. Prompt logprobs move by a mean of 0.137 nats against the Marlin
+  path, inside the chunk-size noise floor (Marlin 4096 vs 2048-token chunks: 0.116).
+
+## BF16 KV with checkpoint KV scales (bug, fixed in `c34b472525`)
+
+With `--kv-cache-dtype bf16`, `best1` on the INT4 checkpoint answered 64k/128k-token prompts with
+fluent text unrelated to the prompt, ending in random tokens. The same config with fp8 KV quoted
+the right code from the first 10% of a 128k context.
+
+Cause, also in upstream `main`:
+- The checkpoint's fp8 calibration scales (k about 0.03) are loaded whatever the cache dtype is.
+- The write path divides by them only when it casts to fp8.
+- FlashInfer multiplies them back in on every read.
+- A BF16 cache therefore had its attention logits scaled by about 0.03.
+
+Fix: `configure_kv_cache_dtype` resets the scales to 1.0 for a 16-bit cache. A regression test
+fails on the old code. `fp8_e4m3` and `auto` (which resolves to fp8 here) were never affected.
+
+## Long-context and full-thinking quality (in progress)
+
+`quality_ab.py --set long`: 4 documents at 64k and 4 at 128k tokens, cut from a pinned snapshot
+of the repo sources (`--src-dir`). Each asks about a function defined in the first 10% and has two
+follow-up turns at depth.
+
+Generation is sampled at xhigh thinking (temperature 1.0, top_p 0.95, top_k 20) with up to 16k
+output tokens. Scoring is on upstream `main` + the fix above, no spec, bf16 KV.
+
+| Config | 64k NLL/tok | 128k NLL/tok | Short set, 16k tokens |
+|---|---|---|---|
+| ref: upstream, no spec, bf16 KV | pending | pending | pending |
+| `best1`, fp8 KV | pending | pending | pending |
+| `best1`, bf16 KV | pending | pending | - |
+| upstream MTP, fp8 KV | pending | pending | - |
+
+FP8 checkpoint at 32k (fp8 KV at scale 1.0 vs bf16 KV) and RULER2 at 32k: pending.

@@ -1,12 +1,14 @@
-# Handoff: SGLang on Ampere for Swift-1.5-Qwen3.8-27B (INT4)
+# Handoff: SGLang on Ampere for Qwen3.8-27B (Swift-1.5 INT4 and Qwen FP8)
 
-- **Branch:** `ampere-opt`, forked from `main` at `14e3414513`. It has 17 commits and has not been pushed.
-- **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9.
+- **Branch:** `ampere-opt`, forked from `main` at `14e3414513`. It has 20 commits and has not been pushed.
+- **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9. RULER2 also needs `inflect nltk wonderwords`, which are installed.
+  - The login shell exports `VIRTUAL_ENV` pointing to the old sglang-inf env. Always `export VIRTUAL_ENV=$PWD/.venv` and use `uv run --active`; `serve.sh` and `bench.sh` already do.
 - **Hardware:** 2x RTX A4500 (20 GB, SM86, 46 SMs), joined by an NVLink bridge (NV4).
 - **Model:** `/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4`.
   - Qwen3.5 hybrid architecture: 48 GDN layers and 16 gated full-attention layers.
   - W4A16 compressed-tensors weights, group 128, symmetric.
   - BF16 MTP head, FP8 KV-cache scales.
+- **FP8 model:** `Qwen/Qwen3.8-27B-FP8` (HF cache). It is block-FP8 (128x128), its MTP head is FP8, and it ships no KV scales. `orcarouter/Qwen3.8-27B-Uncensored-FP8` (abliterated, HF-gated) has the same layout, so everything below applies to it too.
 - **DFlash2 draft:** `/home/ubuntu/experiments/inference/models/Qwen3.8-27B-DFlash2`.
 
 All numbers below were measured on this machine with the scripts in `benchmark/ampere_qwen38/`.
@@ -39,7 +41,17 @@ Results from the old `../inference/sglang-inf` folder came from an older sglang 
 | 4 concurrent users, 1k / 1k | 360.6 tok/s total, TPOT 9.2 ms |
 | 4 concurrent users, 16k prompts / 1k out | 86.2 tok/s total (prefill-dominated) |
 
-**Output quality, sampled and multi-turn:** see section 4b. No config differs from non-speculative upstream decoding.
+**FP8 checkpoint** (`fp8x1`: same recipe on `Qwen/Qwen3.8-27B-FP8`, native FP8 MTP, `LM_ONLY=1`; section 3.10):
+
+| Metric | FP8, upstream code paths | `fp8x1` |
+|---|---|---|
+| KV pool (tokens) | 61k | 114k (125k without the prefill scratch) |
+| S1 / S5 / S6 output tok/s | - | 76.9 / 73.4 / 87.6 (accept 2.61 / 2.48 / 2.91) |
+| 8k / 32k prefill TTFT | 4.67 s / 21.0 s | 3.58 s / 16.6 s |
+
+FP8 decode is 0.62-0.66x of INT4 because the weights are twice the bytes. On A100, the ~3x higher HBM bandwidth more than covers that.
+
+**Output quality, sampled and multi-turn:** see section 4b. No config differs from non-speculative upstream decoding. The long-context and full-thinking checks are in section 4c.
 
 **Accuracy** (GSM8K, 250 examples, greedy, thinking off):
 
@@ -63,8 +75,10 @@ benchmark/ampere_qwen38/serve.sh best1          # single user (MTP), 432k-token 
 benchmark/ampere_qwen38/serve.sh dflash1        # single user, fastest decode (DFlash2), small KV pool
 benchmark/ampere_qwen38/serve.sh best4          # 4 users x ~80k context (MTP)
 benchmark/ampere_qwen38/serve.sh A              # your original command (reference)
+LM_ONLY=1 benchmark/ampere_qwen38/serve.sh fp8x1   # best1 on the FP8 checkpoint (FP8_MODEL=... to override)
 # LM_ONLY=1 adds --language-model-only (text only, frees 0.45 GB/GPU); REPLAY=0 drops ReplaySSM.
-uv run --active python benchmark/ampere_qwen38/quality_ab.py --help   # output-quality A/B (section 4b)
+# serve.sh sets PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for every preset (section 3.12).
+uv run --active python benchmark/ampere_qwen38/quality_ab.py --help   # output-quality A/B (sections 4b, 4c)
 
 benchmark/ampere_qwen38/restart.sh <logname> <preset> [extra args]   # stop, relaunch, wait for ready
 benchmark/ampere_qwen38/bench.sh <tag> S1 S5 S6 S2b S2               # results appended to results/<tag>.jsonl
@@ -98,6 +112,8 @@ sglang serve --model-path $MODEL --served-model-name local --tp-size 2 --context
 ```
 
 Always set `--max-mamba-cache-size`. Left unset with `--max-running-requests 1`, sglang sized 39 mamba state slots, which took 2.8 GB per GPU out of the KV pool.
+
+For the FP8 checkpoint, use the same command with `--model-path Qwen/Qwen3.8-27B-FP8`, without `--speculative-draft-model-quantization` (its MTP is already FP8), plus `--language-model-only` for text-only, and launch it with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
 
 ---
 
@@ -208,18 +224,61 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 - **Result:** 8k TTFT 3.80 -> 3.48 s and 32k TTFT 17.67 -> 16.24 s (about 8%). The scratch adds 0.21 GB per GPU.
 - **Numerics:** tail prompt logprobs differ from Marlin by 0.13 nats on average. The model's own noise floor, Marlin with prefill chunk 2048 against 4096, is 0.19.
 
-### 3.10 Docs, scripts and results
+### 3.10 Dequant + cuBLAS for large-M FP8 Marlin GEMMs (`be93d84363`)
+
+- **Files:**
+  - `python/sglang/kernels/ops/quantization/marlin_dequant.py`: new `marlin_fp8_dequant`. It inverts the 8-bit Marlin layout and decodes e4m3 with integer ops, because Triton has no fp8e4nv casts below SM89. Marlin folds a 2^120 exponent bias into its scales; the kernel undoes it.
+  - `python/sglang/srt/layers/quantization/fp8.py`: `Fp8LinearMethod._apply_marlin_dense` and the scratch sized at load.
+  - `python/sglang/srt/layers/quantization/marlin_utils.py`: `marlin_dense_gemm_min_m`, `use_marlin_dense_gemm`, `marlin_dense_scratch`. These moved here from the W4A16 scheme so both paths share them.
+  - `test_marlin_dequant.py`: 8 new FP8 cases (block and channel-wise, every e4m3 code including subnormals), all bit-exact.
+  - `bench_marlin_shapes.py --wtype fp8`.
+- **Problem:** block-FP8 checkpoints run as Marlin W8A16 on SM8x. At M >= 2048 that reaches 51-63 TFLOPS, against 72-79 for cuBLAS BF16.
+- **Result:** with the same `SGLANG_MARLIN_DEQUANT_GEMM_MIN_M` (2048 on SM8x), 8k TTFT 4.67 -> 3.58 s and 32k TTFT 21.0 -> 16.6 s. The scratch costs 0.18 GB per GPU at TP2.
+- **Numerics:** prompt logprobs move by 0.137 nats on average against Marlin. The chunk-size noise floor is 0.116.
+
+### 3.11 Checkpoint KV scales ignored for a 16-bit KV cache (`c34b472525`)
+
+- **Files:** `python/sglang/srt/mem_cache/kv_cache_dtype.py` (`_reset_kv_scales_for_unquantized_cache`), plus a regression test in `test/registered/unit/layers/quantization/test_compressed_tensors_kv_cache.py`.
+- **Bug (also in upstream `main`):** the Swift INT4 checkpoint ships fp8 calibration scales (k about 0.03), and sglang loads them whatever `--kv-cache-dtype` is.
+  - The write path divides by the scales only when it casts to fp8.
+  - FlashInfer and the other backends always multiply them back in on read.
+  - With `--kv-cache-dtype bf16`, the attention logits were therefore scaled by about 0.03. Attention flattened, and the model wrote fluent text that ignored the prompt. It was found because the 64k/128k BF16-KV quality run returned unrelated answers.
+- **Fix:** once the cache dtype is resolved and it is 16-bit, the scales are reset to 1.0. The log says "Unquantized KV cache: ignoring checkpoint k/v scales on 16 attention layers".
+  - `auto` resolves to fp8 on this checkpoint and keeps the scales.
+  - The recommended presets (`fp8_e4m3`) were never affected.
+  - The FP8 checkpoints ship no scales, so they were never affected either.
+- **Test:** the new case fails on the old code and passes with the fix.
+- **Upstream worktree:** the same patch is applied, uncommitted, in `/home/ubuntu/experiments/sglang-upstream`, so that it can serve as the BF16-KV reference.
+
+### 3.12 `expandable_segments` in `serve.sh`
+
+- **Problem:** with the FP8 checkpoint, the KV pool was only 61k tokens. The draft's embed and lm_head copies (2.5 GB per GPU) are freed when they are shared with the target (3.6), but their blocks sit in allocator segments that the FP8-repacked MTP weights still occupy. That left 1.4 GB reserved and not allocated.
+- **Fix:** `serve.sh` exports `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, overridable.
+- **Result:** FP8 pool 61k -> 125k tokens. INT4 `best1` 432k -> 437k tokens, with S1 unchanged (123.6 tok/s).
+- **Possible follow-up:** load the draft without its own embed and lm_head instead.
+
+### 3.13 Quality tooling: full thinking and long context
+
+- **`quality_ab.py`:**
+  - It now passes `enable_thinking=True` and `reasoning_effort` explicitly (default xhigh), and sends min_p, presence and repetition at 0 / 0 / 1.
+  - Default `--max-tokens` is 16384, and the report has a stop% column.
+  - `--set long --ctx 65536,131072` cuts real source files into long documents and asks about a function defined in the first 10%, then two follow-up turns at depth.
+  - `--src-dir` pins the corpus (for example a `git archive`), so every config sees byte-identical prompts.
+  - `report --by-kind` breaks results down per context bucket.
+- **sgl-eval:** RULER2 and MMLU-Pro run with `--reasoning-effort xhigh --temperature 1.0 --top-p 0.95`; top_k 20 comes from `generation_config.json`. GPQA is gated on HF.
+
+### 3.14 Docs, scripts and results
 
 - `docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx`: an Ampere (SM80/SM86) entry under Configuration Tips, with the measured recipe. This follows the repo's cookbook-first rule.
 - `benchmark/ampere_qwen38/`:
 
   | File | Purpose |
   |---|---|
-  | `serve.sh` | presets A, nospec, B, dflash, M, MD, best1, dflash1, best4; env knobs `DRAFT_QUANT`, `USERS`, `CHUNK`, `MEM_FRAC`, `PREFILL_GRAPH`, `LM_ONLY`, `REPLAY` |
-  | `quality_ab.py` | output-quality A/B: generate on a config, teacher-force score on a reference server (NLL, greedy top-1, divergence) |
+  | `serve.sh` | presets A, nospec, B, dflash, M, MD, best1, dflash1, best4, fp8x1; env knobs `MODEL`, `FP8_MODEL`, `DRAFT_QUANT`, `USERS`, `CHUNK`, `MEM_FRAC`, `PREFILL_GRAPH`, `LM_ONLY`, `REPLAY` |
+  | `quality_ab.py` | output-quality A/B: generate on a config, teacher-force score on a reference server (NLL, greedy top-1, divergence, stop%); short and long (64k/128k) sets |
   | `restart.sh`, `wait_ready.sh` | server lifecycle |
   | `bench.sh` | the scenarios listed in section 2 |
-  | `bench_marlin_shapes.py` | Marlin vs cuBLAS on every per-rank TP2 shape |
+  | `bench_marlin_shapes.py` | Marlin (W4A16 or FP8, `--wtype`) vs cuBLAS on every per-rank TP shape |
   | `trace_breakdown.py` | per-kernel profile tables |
   | `turn_latency.py` | agent-turn TTFT |
   | `build_token_map.py`, `build_code_prompts.py` | token maps and the S6 prompt set |
@@ -241,7 +300,7 @@ These are negative or neutral results, recorded so they don't get re-tried blind
 - **MTP steps 4 or 5:** at most +2%. The default stays at 3/1/4.
 - **8192-token prefill chunks:** OOM at mem 0.90. The expected gain was only about 1.4%.
 - **Prefill CUDA graphs:** they only help very small turns. A 64-token turn drops from 119 to 96 ms; 256 tokens and up are unchanged. Graphs up to 1024 tokens need `--mem-fraction-static 0.86`.
-- **The FP8 KV scales are loaded.** The checkpoint values are k about 0.03-0.04 and v about 0.02-0.03. The "Defaulting to scaling factors of 1.0" warning only refers to `--quantization-param-path`. This is inferred from the load path and a log with no missing parameters; the values were not read back at runtime.
+- **The FP8 KV scales are loaded and applied.** The checkpoint values are k about 0.03-0.04 and v about 0.02-0.03. The broken BF16-KV run (3.11) shows they reach the attention kernels. The "Defaulting to scaling factors of 1.0" warning only refers to `--quantization-param-path`. For the FP8 checkpoints the same warning is real: they ship no scales, so fp8 KV runs at scale 1.0.
 - **DFlash2 vs MTP:** DFlash2 is fastest for 1-2 users. At 4 users it has less KV room than MTP: 269k against 411-423k tokens.
 - **Multi-turn prefix caching works when requests arrive one after another.**
   - A 16k shared prefix hits 14,336 tokens, and a multi-turn continuation hits 16,256.
@@ -263,6 +322,31 @@ This was prompted by a report that `dflash1` felt worse with sampling, thinking 
 
 - **Nothing is lossy, beyond noise.** That includes the DFlash + ReplaySSM routing added on this branch, and the outputs after prefix-cache hits.
 - **Greedy decoding is not run-to-run reproducible here.** The same config with the cache on and off first diverges at a median of about 125 tokens on identical uncached prompts. Differences between single sampled chats are expected and do not indicate a quality loss.
+- **Caveat:** this run used xhigh thinking, the template default, at the recommended sampling params, but with `max_tokens` 1024. Outputs were cut off inside the thinking, so only thinking prefixes were scored. Prompts were at most about 10k tokens. Section 4c closes both gaps.
+
+### 4c. Long-context and full-thinking quality (in progress)
+
+**Setup:**
+- `quality_ab.py --set long`: 4 documents at 64k and 4 at 128k tokens, 3 turns each. Turns 2 and 3 hit the cache at 64k-135k depth.
+- The short set is the 4b prompts with up to 16k output tokens.
+- Everything is sampled at xhigh, temperature 1.0, top_p 0.95, top_k 20.
+- Scoring: teacher-forced on upstream `main` + the 3.11 fix, no spec, BF16 KV.
+- Driver and outputs: `$SCRATCH/quality5_driver.sh`, `$SCRATCH/quality2/`.
+
+| Config | Long 64k | Long 128k | Short (16k) |
+|---|---|---|---|
+| ref: upstream, no spec, BF16 KV (exact sampler) | pending | pending | pending |
+| `best1`, FP8 KV | pending (0.297 nll/tok raw) | pending | pending |
+| `best1`, BF16 KV | pending | pending | - |
+| upstream MTP, FP8 KV | pending | pending | - |
+
+**FP8 checkpoint**, on an FP8 no-spec BF16-KV scorer:
+- quality: a 32k long set (6 docs x 3 turns) and the short set, `fp8x1` with FP8 KV (scale 1.0) against BF16 KV
+- RULER2 at 32k: mk/mv_niah_hard, qa_medium/hard, 25 each
+
+A BF16 pool next to FP8 weights holds only about 57k tokens on 2x A4500, so FP8 at 128k-250k has to be validated on the A100.
+
+- **Qualitative so far:** `best1` with FP8 KV answers 128k-token questions with exact code quotes from the first 10% of the context, and follow-up turns reuse 129k-134k cached tokens.
 
 ---
 
@@ -275,6 +359,16 @@ This was prompted by a report that `dflash1` felt worse with sampling, thinking 
 5. **Opt-in INT8 verify lm_head.** The verify lm_head is 2.2 ms per cycle; INT8 would save about 5% of decode. Validate with GSM8K.
 6. **Mamba slot policy for multi-turn agents,** and an opt-in bf16 SSM state to halve slot cost.
 7. **A100 validation.** All code paths are gated on SM8x and keyed to SM count or shared memory where relevant, but only SM86 was measured.
+   - Capacity estimates for the FP8 checkpoint at mem 0.92, 8 users x 3 mamba slots:
+
+     | Setup | KV pool, fp8 | KV pool, bf16 |
+     |---|---|---|
+     | 2x A100 80GB, TP2 (about 14.5 GB weights per GPU) | about 3.5M tokens | about 1.75M tokens |
+     | 1x A100 80GB, TP1 (about 28.7 GB weights) | about 1.25M tokens | about 0.6M tokens |
+
+   - So 8 x 250k fits at TP2 with fp8 KV only. bf16 KV would hold about 7 x 250k, but its attention is faster on SM8x.
+   - To run on the A100s: the FP8 long-context quality check (4c) at 128k-250k, the dequant threshold (`bench_marlin_shapes.py --wtype fp8`), and RULER2 at 128k.
+8. **KV scales for the FP8 checkpoints.** If 4c shows that scale-1.0 fp8 KV is lossy, add `load_kv_cache_scales` to `qwen3_5.py` (as in `qwen3.py`) plus a small calibration script for `--quantization-param-path`.
 
 ---
 
@@ -295,11 +389,14 @@ This was prompted by a report that `dflash1` felt worse with sampling, thinking 
 | `python/sglang/srt/mem_cache/memory_pool.py` | eager FP8 KV fallback on SM < 89 |
 | `python/sglang/srt/mem_cache/kv_cache_configurator.py` | allow DFLASH + GDN ReplaySSM |
 | `python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16.py` | dequant + cuBLAS dispatch |
-| `python/sglang/srt/environ.py` | `SGLANG_MARLIN_DEQUANT_GEMM_MIN_M` |
-| `python/sglang/kernels/ops/quantization/marlin_dequant.py` (new) | Marlin W4 -> dense dequant kernel |
+| `python/sglang/srt/environ.py` | `SGLANG_MARLIN_DEQUANT_GEMM_MIN_M` (W4A16 and FP8) |
+| `python/sglang/kernels/ops/quantization/marlin_dequant.py` (new) | Marlin W4 and FP8 -> dense dequant kernels |
+| `python/sglang/srt/layers/quantization/fp8.py` | FP8 Marlin dense prefill dispatch |
+| `python/sglang/srt/layers/quantization/marlin_utils.py` | shared dense-GEMM helpers |
+| `python/sglang/srt/mem_cache/kv_cache_dtype.py` | ignore checkpoint KV scales for a 16-bit cache |
 | `python/sglang/kernels/ops/quantization/__init__.py` | kernel registration |
 
-**Tests:** `test/registered/kernels/ops/quantization/test_marlin_dequant.py` (new).
+**Tests:** `test/registered/kernels/ops/quantization/test_marlin_dequant.py` (new; W4 and FP8), `test/registered/unit/layers/quantization/test_compressed_tensors_kv_cache.py` (KV-scale regression).
 
 **Docs:** `docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx`.
 

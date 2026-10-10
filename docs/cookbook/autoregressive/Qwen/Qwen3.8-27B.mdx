@@ -285,6 +285,22 @@ row back to Auto.
   pool. Only MTP holds four 80k-token requests. Full numbers are in
   `benchmark/ampere_qwen38/RESULTS.md`. Under sustained prefill the A4500 sits at its
   200W power cap, so prefill throughput on this card is power-bound.
+
+  The block-FP8 checkpoint (`Qwen/Qwen3.8-27B-FP8`) also runs on SM8x, as Marlin
+  W8A16. Its MTP head is already FP8, so drop `--speculative-draft-model-quantization`.
+  Every other flag above applies. Set
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`: without it, the freed draft
+  embedding and `lm_head` copies stay reserved by the allocator. On 2x A4500 that
+  halves the KV pool, 61k against 125k tokens. FP8 weights are twice the bytes of INT4,
+  so single-user decode is about 0.63x (77 tok/s for 1k in / 1k out). Prefill chunks
+  of 2048 or more tokens also take the dequant + cuBLAS path, cutting 32k-token TTFT
+  from 21.0s to 16.6s. The checkpoint ships no KV scales, so `fp8_e4m3` KV runs at
+  scale 1.0.
+
+  If you serve a checkpoint that ships fp8 KV scales (such as the W4A16 Swift build)
+  with `--kv-cache-dtype bf16`, you need a build that ignores those scales for a 16-bit
+  cache. Without it, attention reads the unscaled cache with the fp8 scales applied,
+  and long-context output stops following the prompt.
 - **MTP**: `--speculative-algorithm EAGLE --speculative-num-steps 3
   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4` uses the
   in-checkpoint MTP head. (This recipe was originally documented with `NEXTN`,

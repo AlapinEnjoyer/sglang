@@ -5,7 +5,8 @@
 #   dflash: A with the DFlash2 block-diffusion draft instead of MTP;
 #   M / MD: multi-user (USERS, default 4) with MTP / DFlash2;
 #   best1 / best4: recommended single-user and 4-user MTP configs on 2x A4500;
-#   dflash1: experimental single-user DFlash2 config (faster, less KV room).
+#   dflash1: experimental single-user DFlash2 config (faster, less KV room);
+#   fp8x1: best1 on a block-FP8 checkpoint (FP8_MODEL, default Qwen/Qwen3.8-27B-FP8), native FP8 MTP.
 #   Env knobs: LM_ONLY=1 adds --language-model-only (no vision); REPLAY=0 drops ReplaySSM.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,6 +14,7 @@ export VIRTUAL_ENV="$REPO/.venv"
 MODEL="${MODEL:-/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4}"
 PORT="${PORT:-8000}"
 preset="${1:-A}"; shift || true
+[ "$preset" = fp8x1 ] && MODEL="${FP8_MODEL:-Qwen/Qwen3.8-27B-FP8}"
 
 common=(
   --model-path "$MODEL" --served-model-name local --tp-size 2
@@ -63,6 +65,13 @@ case "$preset" in
            --speculative-draft-model-quantization fp8
            --speculative-token-map "$maps/swift15_sharegpt_64k.pt"
            "${replay[@]}" "${lm_only[@]}") ;;
+  fp8x1) maps="$REPO/benchmark/ampere_qwen38/token_maps"
+         args=(--chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer
+           --mem-fraction-static "${MEM_FRAC:-0.92}" --max-running-requests 1 --max-mamba-cache-size 8
+           --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 1
+           --speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1
+           --speculative-num-draft-tokens 4 --speculative-token-map "$maps/swift15_sharegpt_32k.pt"
+           "${replay[@]}" "${lm_only[@]}") ;;
   best4) maps="$REPO/benchmark/ampere_qwen38/token_maps"
          export SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1
          args=(--chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy
@@ -75,4 +84,7 @@ case "$preset" in
            "${mtp[@]}") ;;
   *) echo "unknown preset $preset" >&2; exit 1 ;;
 esac
+# Expandable segments let empty_cache return the draft's freed embed/lm_head copies, which
+# otherwise sit in segments shared with live weights: FP8 checkpoint KV pool 61k -> 125k tokens.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 exec env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}" uv run --active sglang serve "${common[@]}" "${args[@]}" "$@"
