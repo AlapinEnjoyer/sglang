@@ -333,12 +333,17 @@ This was prompted by a report that `dflash1` felt worse with sampling, thinking 
 - Scoring: teacher-forced on upstream `main` + the 3.11 fix, no spec, BF16 KV.
 - Driver and outputs: `$SCRATCH/quality5_driver.sh`, `$SCRATCH/quality2/`.
 
-| Config | Long 64k | Long 128k | Short (16k) |
-|---|---|---|---|
-| ref: upstream, no spec, BF16 KV (exact sampler) | pending | pending | pending |
-| `best1`, FP8 KV | pending (0.297 nll/tok raw) | pending | pending |
-| `best1`, BF16 KV | pending | pending | - |
-| upstream MTP, FP8 KV | pending | pending | - |
+NLL/token of the sampled outputs under the reference model [95% bootstrap CI], top-1 agreement, and the share of turns that stopped before the token cap:
+
+| Config | Long 64k | Long 128k | Long overall | top-1 | stop% | Short (16k) |
+|---|---|---|---|---|---|---|
+| ref: upstream, no spec, BF16 KV (exact sampler) | 0.283 | 0.285 | 0.284 [0.261, 0.310] | 89.1% | 100 | 0.326 [0.284, 0.367], stop 84% |
+| `best1`, FP8 KV | 0.297 | 0.298 | 0.297 [0.272, 0.324] | 88.8% | 96 | 0.332 [0.291, 0.377], stop 86% |
+| `best1`, BF16 KV | 0.268 | 0.322 | 0.289 [0.263, 0.319] | 88.9% | 92 | - |
+| upstream MTP, FP8 KV | 0.285 | 0.296 | 0.290 [0.274, 0.311] | 88.9% | 96 | - |
+
+- **Reading:** every config sits inside the reference CI, at 64k and 128k alike. The branch with FP8 KV is 0.013 nats/token above ref and upstream MTP with FP8 KV is 0.006 above, both well inside noise. There is no trend with context length.
+- **Resolution:** 24 turns per config resolve differences of about 0.04 nats/token; smaller losses would need more documents.
 
 **FP8 checkpoint**, on an FP8 no-spec BF16-KV scorer:
 - quality: a 32k long set (6 docs x 3 turns) and the short set, `fp8x1` with FP8 KV (scale 1.0) against BF16 KV

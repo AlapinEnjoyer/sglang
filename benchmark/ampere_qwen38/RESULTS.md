@@ -210,11 +210,14 @@ follow-up turns at depth.
 Generation is sampled at xhigh thinking (temperature 1.0, top_p 0.95, top_k 20) with up to 16k
 output tokens. Scoring is on upstream `main` + the fix above, no spec, bf16 KV.
 
-| Config | 64k NLL/tok | 128k NLL/tok | Short set, 16k tokens |
-|---|---|---|---|
-| ref: upstream, no spec, bf16 KV | pending | pending | pending |
-| `best1`, fp8 KV | pending | pending | pending |
-| `best1`, bf16 KV | pending | pending | - |
-| upstream MTP, fp8 KV | pending | pending | - |
+| Config | 64k NLL/tok | 128k NLL/tok | Overall [95% CI] | top-1 | stop% | Short set, 16k tokens |
+|---|---|---|---|---|---|---|
+| ref: upstream, no spec, bf16 KV | 0.283 | 0.285 | 0.284 [0.261, 0.310] | 89.1% | 100 | 0.326 [0.284, 0.367], 88.0%, stop 84% |
+| `best1`, fp8 KV | 0.297 | 0.298 | 0.297 [0.272, 0.324] | 88.8% | 96 | 0.332 [0.291, 0.377], 87.7%, stop 86% |
+| `best1`, bf16 KV | 0.268 | 0.322 | 0.289 [0.263, 0.319] | 88.9% | 92 | - |
+| upstream MTP, fp8 KV | 0.285 | 0.296 | 0.290 [0.274, 0.311] | 88.9% | 96 | - |
+
+All four are inside the reference CI at both lengths, with no trend from 64k to 128k. 24 turns per
+config resolve about 0.04 nats/token.
 
 FP8 checkpoint at 32k (fp8 KV at scale 1.0 vs bf16 KV) and RULER2 at 32k: pending.
