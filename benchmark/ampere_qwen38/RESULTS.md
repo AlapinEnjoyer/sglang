@@ -201,7 +201,7 @@ Cause, also in upstream `main`:
 Fix: `configure_kv_cache_dtype` resets the scales to 1.0 for a 16-bit cache. A regression test
 fails on the old code. `fp8_e4m3` and `auto` (which resolves to fp8 here) were never affected.
 
-## Long-context and full-thinking quality (in progress)
+## Long-context and full-thinking quality
 
 `quality_ab.py --set long`: 4 documents at 64k and 4 at 128k tokens, cut from a pinned snapshot
 of the repo sources (`--src-dir`). Each asks about a function defined in the first 10% and has two
@@ -220,4 +220,16 @@ output tokens. Scoring is on upstream `main` + the fix above, no spec, bf16 KV.
 All four are inside the reference CI at both lengths, with no trend from 64k to 128k. 24 turns per
 config resolve about 0.04 nats/token.
 
-FP8 checkpoint at 32k (fp8 KV at scale 1.0 vs bf16 KV) and RULER2 at 32k: pending.
+### FP8 checkpoint at 32k: fp8 KV at scale 1.0 vs bf16 KV
+
+`fp8x1` (MTP) on `Qwen/Qwen3.8-27B-FP8`. Long set is 6 docs x 3 turns at 32k; short set is 16k
+output tokens. Scored on an FP8 no-spec bf16-KV server (`--chunked-prefill-size 256`).
+
+| KV cache | Long 32k NLL/tok | top-1 | Short NLL/tok | top-1 | RULER2 32k (mk/mv_niah_hard, qa_medium/hard) |
+|---|---|---|---|---|---|
+| fp8, scale 1.0 | 0.448 [0.429, 0.466] | 83.6% | 0.479 [0.442, 0.518] | 82.9% | 87.0% (92/100/80/76) |
+| bf16 | 0.453 [0.431, 0.478] | 83.4% | 0.480 [0.445, 0.517] | 82.8% | 85.6% (88/92/84/78.4) |
+
+No measurable loss from uncalibrated fp8 KV, so no calibration is needed. 128k-250k on FP8 weights
+does not fit here and needs an A100 run. These NLL values come from a different scorer, so they are
+not comparable with the INT4 table.

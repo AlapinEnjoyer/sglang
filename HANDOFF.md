@@ -324,7 +324,7 @@ This was prompted by a report that `dflash1` felt worse with sampling, thinking 
 - **Greedy decoding is not run-to-run reproducible here.** The same config with the cache on and off first diverges at a median of about 125 tokens on identical uncached prompts. Differences between single sampled chats are expected and do not indicate a quality loss.
 - **Caveat:** this run used xhigh thinking, the template default, at the recommended sampling params, but with `max_tokens` 1024. Outputs were cut off inside the thinking, so only thinking prefixes were scored. Prompts were at most about 10k tokens. Section 4c closes both gaps.
 
-### 4c. Long-context and full-thinking quality (in progress)
+### 4c. Long-context and full-thinking quality
 
 **Setup:**
 - `quality_ab.py --set long`: 4 documents at 64k and 4 at 128k tokens, 3 turns each. Turns 2 and 3 hit the cache at 64k-135k depth.
@@ -345,9 +345,20 @@ NLL/token of the sampled outputs under the reference model [95% bootstrap CI], t
 - **Reading:** every config sits inside the reference CI, at 64k and 128k alike. The branch with FP8 KV is 0.013 nats/token above ref and upstream MTP with FP8 KV is 0.006 above, both well inside noise. There is no trend with context length.
 - **Resolution:** 24 turns per config resolve differences of about 0.04 nats/token; smaller losses would need more documents.
 
-**FP8 checkpoint**, on an FP8 no-spec BF16-KV scorer:
-- quality: a 32k long set (6 docs x 3 turns) and the short set, `fp8x1` with FP8 KV (scale 1.0) against BF16 KV
-- RULER2 at 32k: mk/mv_niah_hard, qa_medium/hard, 25 each
+**FP8 checkpoint** (`Qwen/Qwen3.8-27B-FP8`, `fp8x1` with MTP):
+- **Setup:** a 32k long set (6 docs x 3 turns, turns 2-3 at 32k-50k cached depth) and the short set, both at 16k output tokens.
+- **Scoring:** on an FP8 no-spec BF16-KV server.
+- **Comparison:** FP8 KV with no checkpoint scales (scale 1.0) against BF16 KV. Speculation is the same in both, so the difference isolates the KV cache.
+
+| FP8 checkpoint | Long 32k NLL/tok [95% CI] | top-1 | stop% | Short (16k) NLL/tok [95% CI] | top-1 | stop% | RULER2 32k |
+|---|---|---|---|---|---|---|---|
+| FP8 KV, scale 1.0 | 0.448 [0.429, 0.466] | 83.6% | 89 | 0.479 [0.442, 0.518] | 82.9% | 80 | 87.0% |
+| BF16 KV | 0.453 [0.431, 0.478] | 83.4% | 83 | 0.480 [0.445, 0.517] | 82.8% | 76 | 85.6% |
+
+- **RULER2:** mk_niah_hard / mv_niah_hard / qa_medium / qa_hard, 25 each, at xhigh. Per task, FP8 KV scored 92/100/80/76 and BF16 KV 88/92/84/78.4. All 100 answers stopped before the cap.
+- **Verdict:** FP8 KV at scale 1.0 is not measurably worse than BF16 KV on the FP8 checkpoint. On RULER the standard error is about 3.5 points. **No KV-scale calibration is needed.**
+- **NLL is not comparable with the INT4 table.** It is scored by a different model on different outputs.
+- **Scorer memory:** scoring needs `--chunked-prefill-size 256` next to FP8 weights on 20 GB cards. At 1024, the full-vocab logits (about 1 GB per chunk) OOM.
 
 A BF16 pool next to FP8 weights holds only about 57k tokens on 2x A4500, so FP8 at 128k-250k has to be validated on the A100.
 
@@ -373,7 +384,7 @@ A BF16 pool next to FP8 weights holds only about 57k tokens on 2x A4500, so FP8 
 
    - So 8 x 250k fits at TP2 with fp8 KV only. bf16 KV would hold about 7 x 250k, but its attention is faster on SM8x.
    - To run on the A100s: the FP8 long-context quality check (4c) at 128k-250k, the dequant threshold (`bench_marlin_shapes.py --wtype fp8`), and RULER2 at 128k.
-8. **KV scales for the FP8 checkpoints.** If 4c shows that scale-1.0 fp8 KV is lossy, add `load_kv_cache_scales` to `qwen3_5.py` (as in `qwen3.py`) plus a small calibration script for `--quantization-param-path`.
+8. **KV scales for the FP8 checkpoints (not needed so far).** 4c shows that scale-1.0 fp8 KV matches BF16 KV at 32k. If an A100 run at 128k-250k shows a loss, add `load_kv_cache_scales` to `qwen3_5.py` (as in `qwen3.py`) plus a small calibration script for `--quantization-param-path`.
 
 ---
 
