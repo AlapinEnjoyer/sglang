@@ -11,12 +11,13 @@ from typing import TYPE_CHECKING, Optional
 import numpy
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.quantization.utils import (
     get_scalar_types,
     pack_cols,
     unpack_cols,
 )
-from sglang.srt.utils import get_device_capability, is_cuda
+from sglang.srt.utils import get_device_capability, is_cuda, is_sm80_supported
 from sglang.srt.utils.custom_op import register_custom_op
 
 if TYPE_CHECKING:
@@ -261,6 +262,40 @@ def check_moe_marlin_supports_layer(
         and supports_router_weight
         and supports_activation
     )
+
+
+def marlin_dense_gemm_min_m() -> int:
+    """Token count at which Marlin linears switch to dequant + cuBLAS (0: never)."""
+    min_m = envs.SGLANG_MARLIN_DEQUANT_GEMM_MIN_M.get()
+    if min_m is None:
+        # Measured on RTX A4500 (W4A16 and block-FP8): dequant + cuBLAS overtakes
+        # Marlin from ~2k rows.
+        return 2048 if is_sm80_supported() else 0
+    return min_m
+
+
+def use_marlin_dense_gemm(x: torch.Tensor, min_m: int) -> bool:
+    return (
+        x.numel() // x.shape[-1] >= min_m
+        and not torch.compiler.is_compiling()
+        and not torch.cuda.is_current_stream_capturing()
+    )
+
+
+# One dense-weight scratch per (device, dtype), grown to the largest layer at load
+# time and reused by every layer: linears run one at a time on the forward stream.
+_DENSE_SCRATCH: dict = {}
+
+
+def marlin_dense_scratch(
+    device: torch.device, dtype: torch.dtype, numel: int
+) -> torch.Tensor:
+    key = (device, dtype)
+    buf = _DENSE_SCRATCH.get(key)
+    if buf is None or buf.numel() < numel:
+        buf = torch.empty(numel, dtype=dtype, device=device)
+        _DENSE_SCRATCH[key] = buf
+    return buf[:numel]
 
 
 def marlin_make_workspace(

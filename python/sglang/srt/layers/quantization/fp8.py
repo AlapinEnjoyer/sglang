@@ -80,6 +80,11 @@ from sglang.srt.layers.quantization.fp8_utils import (
     use_aiter_bpreshuffle_gemm,
 )
 from sglang.srt.layers.quantization.kv_cache import BaseKVCacheMethod
+from sglang.srt.layers.quantization.marlin_utils import (
+    marlin_dense_gemm_min_m,
+    marlin_dense_scratch,
+    use_marlin_dense_gemm,
+)
 from sglang.srt.layers.quantization.marlin_utils_fp8 import prepare_fp8_layer_for_marlin
 from sglang.srt.layers.quantization.mxfp8_block_convert import (
     mxfp8_block_convert_required,
@@ -143,6 +148,8 @@ _is_gfx95_supported = is_gfx95_supported()
 
 if _is_hip:
     from sglang.srt.layers.quantization import fp8_hip
+if _is_cuda:
+    from sglang.kernels.ops.quantization.marlin_dequant import marlin_fp8_dequant
 # gfx942 (MI300) has no MX matmul HW; MXFP8 checkpoints are converted to
 # block-fp8 [128,128] at load and run through the native block-fp8 kernels.
 # SGLANG_FORCE_MXFP8_BLOCK_CONVERT=1 opts into that same block-fp8 path on
@@ -559,6 +566,8 @@ class Fp8LinearMethod(LinearMethodBase):
             and getattr(self.quant_config, "scale_fmt", None) != "ue8m0"
             and not envs.SGLANG_NPU_ARCH35_REQUANT_BLOCK_FP8.get()
         )
+        # Large-M (prefill) Marlin linears run as dequant + cuBLAS on SM8x.
+        self.dense_gemm_min_m = marlin_dense_gemm_min_m() if self.use_marlin else 0
         self.w8a8_block_fp8_linear = None
         self.w8a8_mxfp8_linear = None
         self.mxfp8_dense_backend = None
@@ -1388,6 +1397,38 @@ class Fp8LinearMethod(LinearMethodBase):
             prepare_fp8_layer_for_marlin(layer, not self.block_quant)
             # Activations not quantized for marlin.
             del layer.input_scale
+            if self._marlin_dense_supported(layer):
+                # Size the shared scratch while loading so the KV pool sizing sees it.
+                marlin_dense_scratch(
+                    layer.weight.device,
+                    layer.weight_scale.dtype,
+                    layer.input_size_per_partition * layer.output_size_per_partition,
+                )
+
+    def _marlin_dense_supported(self, layer: torch.nn.Module) -> bool:
+        return (
+            self.dense_gemm_min_m > 0
+            and layer.input_size_per_partition % 64 == 0
+            and layer.output_size_per_partition % 64 == 0
+        )
+
+    def _apply_marlin_dense(
+        self, layer: torch.nn.Module, x: torch.Tensor, bias: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        size_k = layer.input_size_per_partition
+        size_n = layer.output_size_per_partition
+        dense = marlin_fp8_dequant(
+            layer.weight,
+            layer.weight_scale,
+            size_k,
+            size_n,
+            self.weight_block_size[1] if self.block_quant else -1,
+            out=marlin_dense_scratch(
+                x.device, layer.weight_scale.dtype, size_k * size_n
+            ).view(size_n, size_k),
+        )
+        out = torch.nn.functional.linear(x.reshape(-1, size_k), dense, bias)
+        return out.reshape(*x.shape[:-1], size_n)
 
     def apply(
         self,
@@ -1396,6 +1437,10 @@ class Fp8LinearMethod(LinearMethodBase):
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.use_marlin:
+            if self._marlin_dense_supported(layer) and use_marlin_dense_gemm(
+                x, self.dense_gemm_min_m
+            ):
+                return self._apply_marlin_dense(layer, x, bias)
             return torch.ops.sglang.apply_fp8_marlin_linear(
                 input=x,
                 weight=layer.weight,
