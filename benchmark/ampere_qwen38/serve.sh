@@ -4,8 +4,8 @@
 #   preset A: the reference single-user MTP command; B: cookbook-style variant; nospec: A without speculation;
 #   dflash: A with the DFlash2 block-diffusion draft instead of MTP;
 #   M / MD: multi-user (USERS, default 4) with MTP / DFlash2;
-#   best1 / best4: recommended single-user and 4-user MTP configs on 2x A4500;
-#   dflash1: experimental single-user DFlash2 config (faster, less KV room);
+#   dflash1: recommended single-user config (DFlash2, 294k KV pool; keep LM_ONLY=0, it lowers acceptance);
+#   best1 / best4: single-user (most KV room, use LM_ONLY=1) and 4-user MTP configs on 2x A4500;
 #   fp8x1: best1 on a block-FP8 checkpoint (FP8_MODEL, default Qwen/Qwen3.8-27B-FP8), native FP8 MTP.
 #   Env knobs: LM_ONLY=1 adds --language-model-only (no vision); REPLAY=0 drops ReplaySSM.
 set -euo pipefail

@@ -265,14 +265,38 @@ row back to Auto.
     SSM verify buffers, which take 1.4GB (MTP) to 2.8GB (DFLASH2) per GPU at 4
     concurrent requests.
   - **Text-only serving:** add `--language-model-only` when you serve only text. It
-    skips the vision tower and frees 0.45GB per GPU.
+    skips the vision tower and frees 0.45GB per GPU. Use it with MTP only, because
+    it lowers DFLASH2 acceptance.
   - **Mamba state slots:** set `--max-mamba-cache-size` (8 for one user, about 3 per
     concurrent user). Left unset at `--max-running-requests 1`, it sized 39 slots,
     2.8GB per GPU taken from the KV pool.
   
-  For one user, MTP + token map + FP8 draft + ReplaySSM with 8 slots gives a
-  432k-token KV pool. DFLASH2 decodes faster but its draft weights and full-length
-  draft KV cut the pool to about 165k tokens.
+  For one user, the fastest setup is DFLASH2 with a 64k token map, an FP8 draft,
+  ReplaySSM and 5 mamba slots. Its KV pool is 294k tokens, enough for the full
+  262k context. On 2x RTX A4500 it decodes 173 tok/s for 1k in / 1k out, 137 tok/s
+  on ShareGPT chat and 158 tok/s on code:
+
+  ```bash
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True sglang serve \
+    --model-path <W4A16 INT4 checkpoint> --tp-size 2 \
+    --context-length 262144 --kv-cache-dtype fp8_e4m3 \
+    --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+    --chunked-prefill-size 4096 --mamba-radix-cache-strategy extra_buffer \
+    --mem-fraction-static 0.90 --max-running-requests 1 --max-mamba-cache-size 5 \
+    --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 1 \
+    --speculative-algorithm DFLASH --speculative-num-draft-tokens 8 \
+    --speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2 \
+    --speculative-draft-model-quantization fp8 \
+    --speculative-token-map <64k token map> \
+    --enable-linear-replayssm-spec
+  ```
+
+  Do not add `--language-model-only` with DFLASH2. It drops code acceptance from
+  3.76 to 3.26 tokens per step, which cuts code decode from 158 to 138 tok/s. MTP is
+  not affected. For more KV room, use MTP with a 32k map, an FP8 draft, ReplaySSM,
+  8 slots and `--language-model-only`. That gives a 476k-token pool and
+  133 / 112 / 142 tok/s. MTP is also faster than DFLASH2 on code when
+  `--language-model-only` is set.
   
   Prefill chunks of 2048 or more tokens switch from Marlin to dequant + cuBLAS on
   SM8x (`SGLANG_MARLIN_DEQUANT_GEMM_MIN_M`, 0 disables). Measured single-user

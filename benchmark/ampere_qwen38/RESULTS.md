@@ -233,3 +233,22 @@ output tokens. Scored on an FP8 no-spec bf16-KV server (`--chunked-prefill-size 
 No measurable loss from uncalibrated fp8 KV, so no calibration is needed. 128k-250k on FP8 weights
 does not fit here and needs an A100 run. These NLL values come from a different scorer, so they are
 not comparable with the INT4 table.
+
+## Single-user recommendation, re-measured 2026-10-13 (INT4, current branch)
+
+Same session and same `bench.sh` seeds. S7 is a 100k-token prompt, 256 out.
+
+| Preset | KV pool | S1 | S5 | S6 | 8k / 32k TTFT |
+|---|---|---|---|---|---|
+| `dflash1` (5 slots), vision on | 294k | 172.8* | 137.4 (3.38) | 158.2 (3.76) | - |
+| `dflash1`, `LM_ONLY=1` | 323k | 176.3 (4.28) | 142.0 (3.47) | 138.3 (3.26), reproduced | 3.59 s / 16.2 s |
+| `best1` (MTP, 8 slots), `LM_ONLY=1` | 476k | 133.4 (3.00) | 112.1 (2.51) | 141.6 (3.11) | - |
+
+\* from the ReplaySSM section above.
+
+- The earlier 165k pool for DFlash2 came from leaving the default 39 mamba slots. With 5 slots,
+  DFlash2 holds the full 262k context. `dflash1` with vision on is now the single-user
+  recommendation. A 100k-token prompt runs (65 s TTFT).
+- `--language-model-only` lowers DFlash2 acceptance on code (3.76 -> 3.26), reproducibly. It does
+  not hurt MTP. The cause has not been investigated. The text-only path uses plain RoPE positions
+  instead of mrope, which may shift the target hidden states the draft conditions on.
