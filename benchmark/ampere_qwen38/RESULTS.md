@@ -252,3 +252,28 @@ Same session and same `bench.sh` seeds. S7 is a 100k-token prompt, 256 out.
 - `--language-model-only` lowers DFlash2 acceptance on code (3.76 -> 3.26), reproducibly. It does
   not hurt MTP. The cause has not been investigated. The text-only path uses plain RoPE positions
   instead of mrope, which may shift the target hidden states the draft conditions on.
+
+## After the upstream sync, 2026-11-07 (branch rebased onto `ba5906471c`)
+
+Same `bench.sh` scenarios. "Upstream" is upstream `main` at `ba5906471c` with the reference MTP
+command (preset `A`), so it is today's baseline, not the October one. Accept length in parentheses.
+
+| Config | KV pool | S1 | S5 | S6 | 8k / 32k TTFT |
+|---|---|---|---|---|---|
+| upstream, preset `A` | 283k | 94.9 (2.99) | 82.6 (2.60) | 102.3 (3.18) | 4.02 s / 17.96 s |
+| branch `best1`, `LM_ONLY=1` | 476k | 133.1 (3.00) | 111.5 (2.51) | 141.4 (3.11) | 3.57 s / 16.44 s (vision on) |
+| branch `dflash1` | 294k | 173.8 (4.29) | 137.2 (3.34) | 158.8 (3.76) | - |
+
+- **The branch's numbers are unchanged by the sync** (pre-sync: 133.4 / 112.1 / 141.6 and
+  172.8 / 137.4 / 158.2). Upstream's own MTP baseline has not moved either (95.3 / 82.8 in October).
+- **Accuracy:** GSM8K, 250 examples, greedy, thinking off, `best1` with `LM_ONLY=1`: 0.980. `sgl-eval`
+  moved from 0.1.2 to 0.1.3 in the sync, so this is not directly comparable with the 0.96-0.97 above.
+- **Fixes the sync needed:**
+  - `tiny_gemm` lost its `max_m` argument and now picks its kernel by batch size, so the SM8x
+    skinny-linear route crashed on its first decode call.
+  - The SM8x fallback in `_set_mha_kv_buffer_prefix_valid` now divides out of place, like the fused
+    kernel it stands in for. The legacy eager writer keeps dividing in place, as upstream's tests require.
+- **Known test failures on SM86:** `TestDflashFp8PrefixCommit::test_dflash_constructor_initializes_fp8_prefix_scales`
+  asserts the fused fp8 Triton kernel ran, which is impossible below SM89. Upstream fails all 21 tests in
+  `test_prefix_valid_fp8_pool.py` on SM86 (`fp8e4nv not supported`); the branch fails only those 2.
+

@@ -1,6 +1,7 @@
 # Handoff: SGLang on Ampere for Qwen3.8-27B (Swift-1.5 INT4 and Qwen FP8)
 
-- **Branch:** `ampere-opt`, forked from `main` at `14e3414513`. It has 20 commits and has not been pushed.
+- **Branch:** `ampere-opt`, rebased on 2026-11-07 onto upstream `main` at `ba5906471c` (originally forked at `14e3414513`). It has 25 commits and has not been pushed. The pre-sync branch is kept as `ampere-opt-pre-sync-20261107`.
+  - Remote `upstream` is `sgl-project/sglang`. To sync again: `git fetch upstream`, fast-forward `main` in the `../sglang-upstream` worktree, `git rebase main`, then reinstall (`uv pip install --prerelease=allow -e "python[dev]"`) and copy the rebuilt `*.so` files into the upstream worktree.
 - **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9. RULER2 also needs `inflect nltk wonderwords`, which are installed.
   - The login shell exports `VIRTUAL_ENV` pointing to the old sglang-inf env. Always `export VIRTUAL_ENV=$PWD/.venv` and use `uv run --active`; `serve.sh` and `bench.sh` already do.
 - **Hardware:** 2x RTX A4500 (20 GB, SM86, 46 SMs), joined by an NVLink bridge (NV4).
