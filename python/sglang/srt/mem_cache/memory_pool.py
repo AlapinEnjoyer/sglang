@@ -2197,14 +2197,14 @@ def _set_mha_kv_buffer_prefix_valid(
         getattr(layer, "v_scale", None),
         getattr(layer, "v_scale_float", None),
     )
-    # fuse quantization and writing into the same kernel
-    if (
+    fusable = (
         cache_k.dtype != pool.dtype
         and pool.dtype == fp8_dtype
         and fused_k_scale is not None
         and fused_v_scale is not None
-        and _triton_has_fp8e4nv
-    ):
+    )
+    # fuse quantization and writing into the same kernel
+    if fusable and _triton_has_fp8e4nv:
         _set_kv_buffer_prefix_valid_impl_fp8(
             cache_k,
             cache_v,
@@ -2220,14 +2220,18 @@ def _set_mha_kv_buffer_prefix_valid(
         )
         return
 
-    # fallback: eager quantization, with the same scales the fused kernel uses
+    # fallback: eager quantization
+    if fusable:
+        # Fused kernel unavailable (Triton lacks fp8e4nv below SM89): match it,
+        # leaving the caller's K/V untouched.
+        cache_k = cache_k / k_scale
+        cache_v = cache_v / v_scale
+    elif cache_k.dtype != pool.dtype:
+        if k_scale is not None:
+            cache_k.div_(k_scale)
+        if v_scale is not None:
+            cache_v.div_(v_scale)
     if cache_k.dtype != pool.dtype:
-        k_div = k_scale if k_scale is not None else fused_k_scale
-        v_div = v_scale if v_scale is not None else fused_v_scale
-        if k_div is not None:
-            cache_k.div_(k_div)
-        if v_div is not None:
-            cache_v.div_(v_div)
         if pool.dtype == fp8_dtype:
             # Saturate like the fused kernel above; see saturate_to_fp8_range.
             cache_k = saturate_to_fp8_range(cache_k, pool.dtype)

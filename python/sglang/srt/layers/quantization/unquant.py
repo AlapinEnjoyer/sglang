@@ -108,13 +108,13 @@ def _use_sm8x_tiny_gemm(
         return False
     from sglang.kernels.ops.gemm.tiny_gemm import can_use_tiny_gemm
 
-    return can_use_tiny_gemm(n, k, max_m=_SM8X_TINY_GEMM_MAX_M)
+    return can_use_tiny_gemm(n, k)
 
 
 def _sm8x_tiny_gemm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     from sglang.kernels.ops.gemm.tiny_gemm import tiny_gemm_bf16
 
-    return tiny_gemm_bf16(x, weight, max_m=_SM8X_TINY_GEMM_MAX_M)
+    return tiny_gemm_bf16(x, weight)
 
 
 # Route supported decode shapes that are absent from the tuned table.
