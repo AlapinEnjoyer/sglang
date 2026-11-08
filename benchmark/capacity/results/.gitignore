@@ -1,0 +1,5 @@
+# Studio runs: keep report.md, summary.json, machine.json and burst/results.jsonl.
+*.log
+gsm8k/
+server_info.json
+bench_serving*

@@ -1,0 +1,45 @@
+# About 15 minutes: every studio step once, on small sizes, to check a new machine or
+# checkout before a long suite. The disk step uses the HiCache file backend under
+# $STUDIO_STORAGE (default below); it needs libssl-dev for the storage hash module.
+#
+#   MODEL=/models/Swift-1.5-Qwen3.8-27b-INT4 python benchmark/capacity/studio.py run \
+#       benchmark/capacity/configs/studio-smoke.toml
+
+launch = "sglang serve"
+port = 30000
+server_args = """
+  --model-path $MODEL --served-model-name local --tp 2 --host 127.0.0.1
+  --kv-cache-dtype fp8_e4m3 --mem-fraction-static 0.87 --mamba-ssm-dtype bfloat16
+  --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy
+  --disable-prefill-cuda-graph --context-length 32768 --max-running-requests 4
+  --max-mamba-cache-size 24 --cuda-graph-max-bs-decode 4
+  --enable-hierarchical-cache --hicache-size 8 --hicache-write-policy write_through
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec
+"""
+
+[env]
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK = "1"
+SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR = "/tmp/studio-hicache"
+SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE = "20G"
+
+[steps.cache]
+[steps.gsm8k]
+num_examples = 40
+[steps.burst]
+args = "--context-lens 8k --users 1,4 --repeats 1"
+[steps.multiturn]
+clients = [4]
+rounds = 3
+request_length = 2000
+output_length = 200
+request_rate = 1.0
+[steps.disk]
+session_len = 8000
+
+[[configs]]
+name = "smoke-disk"
+server_args = """
+  --page-size 64 --hicache-storage-backend file --hicache-storage-prefetch-policy wait_complete
+"""

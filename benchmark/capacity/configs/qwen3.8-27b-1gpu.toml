@@ -1,0 +1,210 @@
+# Qwen3.8-27B family (hybrid GDN, in-checkpoint MTP) on one 48 GB GPU (L40S, A6000, ...).
+# Compares speculative decoding against none, the running-request cap, the prefill chunk,
+# and a 262k vs 120k context cap. Baseline flags follow
+# docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx; adjust to your checkpoint.
+#
+#   MODEL=/models/Qwen3.8-27B-INT4 DFLASH=/models/Qwen3.8-27B-DFlash2 \
+#   python benchmark/capacity/config_sweep.py benchmark/capacity/configs/qwen3.8-27b-1gpu.toml \
+#       --slo-decode 30 --slo-ttft 120
+#
+# Config server_args come after the shared ones, so a repeated flag takes the config's value.
+# $VARS are expanded from the environment; the sweep adds --port itself.
+
+launch = "sglang serve"
+port = 30000
+startup_timeout = 1800
+
+server_args = """
+  --model-path $MODEL --served-model-name local
+  --kv-cache-dtype fp8_e4m3 --mem-fraction-static 0.90
+  --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+  --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy
+  --disable-prefill-cuda-graph --host 127.0.0.1
+"""
+
+# The model's recommended sampling: it sets the speculative acceptance length.
+bench_args = """
+  --context-lens 8k,32k,full --users auto --repeats 2
+  --sampling-params '{"temperature":1.0,"top_p":0.95,"top_k":20}'
+"""
+
+[env]
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+# Frees one GDN state slot per running request (cookbook: Mamba ratio calculator).
+SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK = "1"
+
+# Two users at the native 262k context.
+[[configs]]
+name = "mtp-262k-c2"
+server_args = """
+  --context-length 262144 --max-running-requests 2 --max-mamba-cache-size 8
+  --cuda-graph-max-bs-decode 2
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+bench_args = "--context-lens 32k,128k,full --users 1,2"
+
+[[configs]]
+name = "mtp-120k-c4"
+server_args = """
+  --context-length 122880 --max-running-requests 4 --max-mamba-cache-size 16
+  --cuda-graph-max-bs-decode 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+[[configs]]
+name = "mtp-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# Fewer draft tokens: cheaper verify once the batch is compute-bound.
+[[configs]]
+name = "mtp2-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8
+  --speculative-algorithm EAGLE --speculative-num-steps 1 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 2 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+[[configs]]
+name = "nospec-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8
+"""
+
+# Each prefill chunk also carries one decode token per running user.
+[[configs]]
+name = "nospec-mixed-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk
+"""
+
+# MTP with mixed chunks: running users get a plain decode token per prefill chunk.
+[[configs]]
+name = "mtp-mixed-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# K decode steps after every prefill chunk: running users keep decoding while a long
+# prompt prefills, and that prompt's TTFT grows.
+[[configs]]
+name = "mtp-pdi4-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --prefill-decode-interval 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+[[configs]]
+name = "mtp-pdi8-120k-c8"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --prefill-decode-interval 8
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# The MTP draft loads its own embedding and lm_head (~5 GB bf16) before it shares the
+# target's, so the KV pool is sized ~4 GB short; 0.97 hands that back to the KV pool.
+[[configs]]
+name = "mtp-mem97-120k-c8"
+server_args = """
+  --mem-fraction-static 0.97
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# Candidates for 8 users: mixed chunks (all 8 admitted at 32k) plus the reclaimed KV,
+# with and without a decode interval for running users during long prefills.
+[[configs]]
+name = "mtp-mixed-mem97-120k-c8"
+server_args = """
+  --mem-fraction-static 0.97
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+[[configs]]
+name = "mtp-mixed-pdi4-mem97-120k-c8"
+server_args = """
+  --mem-fraction-static 0.97
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# bf16 GDN state halves each state slot (154 -> 78 MB), and the freed memory goes to KV.
+# On 2x A4500 (pip 0.5.21): KV pool +63%, the same verify steps/s, GSM8K 94.6% vs 93.0%
+# at fp32. With --enable-linear-replayssm-spec it logs a warning to validate long-sequence
+# accuracy, which GSM8K's short prompts do not cover.
+[[configs]]
+name = "mtp-mixed-pdi4-mem97-bf16-120k-c8"
+server_args = """
+  --mem-fraction-static 0.97 --mamba-ssm-dtype bfloat16
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 32
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# 3 state slots per user (extra_buffer_lazy with SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1)
+# and none spare for idle sessions: ~1.2 GB more KV, fewer cached sessions.
+[[configs]]
+name = "mtp-120k-c8-slots24"
+server_args = """
+  --context-length 122880 --max-running-requests 8 --max-mamba-cache-size 24
+  --cuda-graph-max-bs-decode 8
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# Bigger prefill chunks: faster prefill, longer decode stalls for the other users.
+[[configs]]
+name = "mtp-120k-c4-chunk8k"
+server_args = """
+  --context-length 122880 --max-running-requests 4 --max-mamba-cache-size 16
+  --cuda-graph-max-bs-decode 4 --chunked-prefill-size 8192
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8
+  --enable-linear-replayssm-spec
+"""
+
+# DFlash2 draft: faster per user, but its weights and 8-token verify buffers cost KV.
+[[configs]]
+name = "dflash-120k-c4"
+server_args = """
+  --context-length 122880 --max-running-requests 4 --max-mamba-cache-size 16
+  --cuda-graph-max-bs-decode 4
+  --speculative-algorithm DFLASH --speculative-draft-model-path $DFLASH
+  --speculative-num-draft-tokens 8
+"""
