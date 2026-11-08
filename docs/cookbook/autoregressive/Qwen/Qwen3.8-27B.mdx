@@ -323,6 +323,7 @@ row back to Auto.
     `--hicache-storage-backend file` and `--hicache-storage-prefetch-policy wait_complete`.
     Page size 1 writes one file per token. The default `timeout` policy discards
     restores from a cold disk. The file backend needs the OpenSSL headers (`libssl-dev`).
+    `SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE` applies per TP rank, so budget TP times it on disk.
 
   ```bash
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1 \

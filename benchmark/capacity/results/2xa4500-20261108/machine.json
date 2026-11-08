@@ -1,0 +1,15 @@
+{
+ "host": "dsa-gpu-nvlink",
+ "date": "2026-11-08T19:56:44",
+ "gpus": [
+  "NVIDIA RTX A4500, 20470 MiB, 8.6, 595.58.03, 4, 16, 200.00 W",
+  "NVIDIA RTX A4500, 20470 MiB, 8.6, 595.58.03, 4, 16, 200.00 W"
+ ],
+ "nvlink": true,
+ "cpu": "Intel Xeon Processor (SapphireRapids)",
+ "ram_gb": 52.62454784,
+ "ram_available_gb": 49.64722688,
+ "repo": "ampere-opt@160651da85",
+ "storage_dir": "/home/ubuntu/hicache-studio",
+ "storage_read_mb_s": 125.00442520548212
+}

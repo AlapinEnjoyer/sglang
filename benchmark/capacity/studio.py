@@ -580,8 +580,47 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=1, default=str))
 
 
+def _parse_size(text: str) -> int:
+    m = re.fullmatch(r"\s*([\d.]+)\s*([KMGT]?)i?B?\s*", text, re.IGNORECASE)
+    if not m:
+        raise SystemExit(f"cannot parse size {text!r}")
+    # Decimal units, as sglang's human_readable_int reads them: 40G is 40e9 bytes.
+    return int(float(m[1]) * 1000 ** "_KMGT".index(m[2].upper() or "_"))
+
+
+def _tp_size(args: List[str]) -> int:
+    for flag in ("--tp", "--tp-size", "--tensor-parallel-size"):
+        if flag in args:
+            return int(args[args.index(flag) + 1])
+    return 1
+
+
+def check_storage_budget(spec: StudioSpec, cfg: StudioConfig) -> None:
+    """The file backend's MAX_SIZE is enforced per TP rank, so TP x MAX_SIZE can land on disk."""
+    env = {**spec.env, **cfg.env}
+    directory, cap = (
+        env.get(f"SGLANG_HICACHE_FILE_BACKEND_{k}") for k in ("STORAGE_DIR", "MAX_SIZE")
+    )
+    if "--hicache-storage-backend" not in server_command(spec, cfg) or not (
+        directory and cap
+    ):
+        return
+    directory = Path(_expand(directory, where=f"{cfg.name}.env.STORAGE_DIR"))
+    directory.mkdir(parents=True, exist_ok=True)
+    worst = _tp_size(server_command(spec, cfg)) * _parse_size(cap)
+    free = shutil.disk_usage(directory).free
+    if worst > free:
+        raise SystemExit(
+            f"{cfg.name}: up to {worst / 1e9:.0f} GB of storage tier (MAX_SIZE {cap} per TP rank) "
+            f"but {free / 1e9:.0f} GB free under {directory}; lower SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE"
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     spec = load_spec(args.suite)
+    for cfg in spec.configs:
+        if not args.only or cfg.name in args.only.split(","):
+            check_storage_budget(spec, cfg)
     only = set(args.only.split(",")) if args.only else None
     out = (
         args.out_dir
@@ -600,18 +639,15 @@ def cmd_run(args: argparse.Namespace) -> None:
     )
     storage = os.path.expandvars(storage)
     storage = "" if "$" in storage else storage
-    _write_json(
-        out / "machine.json", gather_machine(Path(storage) if storage else None)
-    )
+    if not (args.resume and (out / "machine.json").exists()):
+        machine = gather_machine(Path(storage) if storage else None)
+        _write_json(out / "machine.json", machine)
     for cfg in spec.configs:
         if only and cfg.name not in only:
             continue
-        if args.resume and (out / cfg.name / "summary.json").exists():
-            if (
-                json.loads((out / cfg.name / "summary.json").read_text()).get("status")
-                == "ok"
-            ):
-                continue
+        done = _read_summary(out / cfg.name / "summary.json") if args.resume else None
+        if done and done.get("status") == "ok":
+            continue
         run_config(spec, cfg, out / cfg.name)
         write_report([out], out / "report.md")
     print(f"\nreport: {out / 'report.md'}")
@@ -624,12 +660,18 @@ def _f(v: Any, spec: str = ".1f") -> str:
     return "-" if v is None else format(v, spec)
 
 
+def _read_summary(path: Path) -> Optional[Dict[str, Any]]:
+    """None when the file is missing or cut short, e.g. by a crash mid-write."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _load_run(run_dir: Path) -> Dict[str, Any]:
     machine = json.loads((run_dir / "machine.json").read_text())
-    configs = [
-        json.loads(p.read_text()) for p in sorted(run_dir.glob("*/summary.json"))
-    ]
-    return {"dir": run_dir, "machine": machine, "configs": configs}
+    summaries = (_read_summary(p) for p in sorted(run_dir.glob("*/summary.json")))
+    return {"dir": run_dir, "machine": machine, "configs": [c for c in summaries if c]}
 
 
 def _gpu_label(machine: Dict[str, Any]) -> str:

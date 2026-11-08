@@ -331,12 +331,34 @@ The 20-session runs are overloaded: the server completes only 0.18-0.20 requests
   KV alone is not enough.
   - Each running request holds 3 slots, so 32 slots leave 8 for idle sessions.
   - `--hicache-size` is split between host KV and host state in proportion to the GPU pools.
-    The fork's larger KV pool therefore takes host state slots away: 61 against vanilla's 78.
+- **Vanilla against the fork at 32 slots is noise.** The studio rerun below flipped the order
+  (vanilla 0.425, fork 0.487). The 64-slot result reproduced (0.684, then 0.691).
 - **More slots win.** 64 slots cost 76k GPU KV tokens and are the best setting found.
 - **Noise.** Single runs of this overloaded test vary by several points. Page size 64 against
   1 at 64 slots (0.66-0.67 against 0.68) is within that noise.
 - **The storage tier.** It recovers most of what a small RAM tier loses (0.32 -> 0.47), even
   on this VM's 131 MB/s disk.
+
+### Reproduced with the benchmark studio (`results/2xa4500-20261108`)
+
+Setup: the same configs, run by `studio.py run benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
+Full report: `benchmark/capacity/results/2xa4500-20261108/report.md`.
+
+| Config | KV pool | GSM8K | 1 / 4 / 8 users of 32k, total tok/s | 10 / 20 sessions: hits |
+|---|---|---|---|---|
+| vanilla, mem 0.90, 32 slots | 264k | 98.4% | 78.7 / 274 / does not fit | 0.730 / 0.425 |
+| fork, same flags, mem 0.87, 32 slots | 371k | 98.0% | 87.8 / 277 / 411 | 0.716 / 0.437 |
+| fork + FP8 draft + 32k map, 32 slots | 363k | 98.0% | 110.7 / 314 / 475 | 0.701 / 0.487 |
+| fork + FP8 draft + 32k map, 64 slots | 287k | - | 105.8 / 315 / 470 | 0.730 / **0.691** |
+| same + page 64 + file storage tier | 287k | - | - | 0.730 / **0.699** |
+
+Storage-tier restore of a 30k session in that run: cold prefill 15.6 s, GPU hit 0.27 s, after a
+flush 0.60 s, after a restart 9.3 s. The tier held 26 GB with `MAX_SIZE` 15G per TP rank.
+`SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE` is enforced per rank: with 40G at TP2, an earlier attempt
+wrote past 53 GB and filled the disk. `studio.py run` now refuses when TP x MAX_SIZE exceeds the
+free space.
+
+- The fork with the user's flags held all 8 users at 0.87; at 0.90 it had crashed.
 
 ### Session restore from the storage tier (HiCache `file` backend)
 

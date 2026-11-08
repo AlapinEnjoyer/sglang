@@ -27,7 +27,9 @@ server_args = """
 PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK = "1"
 SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR = "$STUDIO_STORAGE"
-SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE = "40G"
+# Per TP rank: TP2 can write twice this. MIN_FREE_SPACE stops writes before the disk fills.
+SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE = "15G"
+SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE = "10G"
 
 [steps.cache]
 [steps.gsm8k]

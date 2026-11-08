@@ -1,0 +1,196 @@
+{
+ "name": "fork-fp8-map",
+ "server_cmd": "/home/ubuntu/experiments/sglang/.venv/bin/sglang serve --model-path /home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4 --served-model-name local --tp 2 --host 127.0.0.1 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8 --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through --mem-fraction-static 0.87 --max-mamba-cache-size 32 --speculative-draft-model-quantization fp8 --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt --port 30000",
+ "env": {
+  "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+  "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1",
+  "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": "/home/ubuntu/hicache-studio",
+  "SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE": "40G"
+ },
+ "steps": {
+  "cache": {
+   "rows": [
+    {
+     "request": "turn 1 (new prompt)",
+     "prompt": 4000,
+     "cached": 0,
+     "reusable": 0
+    },
+    {
+     "request": "same prompt again",
+     "prompt": 4000,
+     "cached": 3968,
+     "reusable": 4000
+    },
+    {
+     "request": "turn 2 (prompt + output + new)",
+     "prompt": 5200,
+     "cached": 4096,
+     "reusable": 4200
+    }
+   ],
+   "ok": true
+  },
+  "gsm8k": {
+   "score": 0.98,
+   "truncated_rate": 0.004,
+   "settings": "--temperature 0 --chat-template-kwarg enable_thinking=false",
+   "num_examples": 250
+  },
+  "burst": {
+   "cells": {
+    "32768x1": {
+     "context_len": 32768,
+     "users": 1,
+     "max_new_tokens": 512,
+     "all_concurrent": true,
+     "ttft_first": 17.334083689842373,
+     "ttft_last": 17.334083689842373,
+     "prefill_tps_first_user": 1890.3864862768928,
+     "prefill_tps_all": 1890.3864862768928,
+     "decode_tps_per_user": 110.65009861057587,
+     "decode_tps_total": 110.65009861057587,
+     "decode_tps_slowest_user": 110.65009861057587,
+     "decode_tps_while_others_prefill": null,
+     "accept_length": 2.727753303964758
+    },
+    "32768x4": {
+     "context_len": 32768,
+     "users": 4,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.471849364461377,
+     "ttft_last": 76.61179915280081,
+     "prefill_tps_first_user": 1875.4743395708026,
+     "prefill_tps_all": 1710.8620433693677,
+     "decode_tps_per_user": 78.44327718722724,
+     "decode_tps_total": 313.77310874890895,
+     "decode_tps_slowest_user": 66.20472451679504,
+     "decode_tps_while_others_prefill": 10.280762174350171,
+     "accept_length": 2.7811461794019934
+    },
+    "32768x8": {
+     "context_len": 32768,
+     "users": 8,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.429428901989013,
+     "ttft_last": 159.7544166177977,
+     "prefill_tps_first_user": 1880.038819020438,
+     "prefill_tps_all": 1640.918641472349,
+     "decode_tps_per_user": 59.39147037975994,
+     "decode_tps_total": 475.1317630380795,
+     "decode_tps_slowest_user": 49.12471079810474,
+     "decode_tps_while_others_prefill": 9.999059471584822,
+     "accept_length": 2.997878787878788
+    }
+   },
+   "skipped": [],
+   "error": null
+  },
+  "multiturn": {
+   "ceiling": 0.7377049180327869,
+   "settings": {
+    "clients": [
+     10,
+     20
+    ],
+    "rounds": 6,
+    "request_length": 4000,
+    "output_length": 500,
+    "request_rate": 0.5,
+    "max_parallel": 8,
+    "decision_rate": 0.0,
+    "session_ids": false,
+    "priority": null
+   },
+   "runs": {
+    "10": {
+     "total_requests": 60,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 4.844099626278815,
+     "p90_ttft": 8.63643854483962,
+     "p99_ttft": 14.523228416219354,
+     "median_ttft": 3.615880341269076,
+     "max_ttft": 14.523228416219354,
+     "average_tpot": 0.03454370981806474,
+     "p90_tpot": 0.05438482638108796,
+     "p99_tpot": 0.07518265153724649,
+     "median_tpot": 0.03223845148776361,
+     "max_tpot": 0.08625832454904257,
+     "average_itl": 0.10948942372897412,
+     "p90_itl": 0.04661979712545872,
+     "p99_itl": 1.1629858240485191,
+     "median_itl": 0.03531606076285243,
+     "max_itl": 1.23250128980726,
+     "average_latency": 22.081410825493126,
+     "p90_latency": 34.97468951810151,
+     "p99_latency": 50.91814131196588,
+     "median_latency": 22.081982822157443,
+     "max_latency": 50.91814131196588,
+     "input_token_throughput": 4579.687997455932,
+     "output_token_throughput": 150.15370483462073,
+     "throughput": 0.30030740966924147,
+     "cache_hit_rate": 0.7008524590163935,
+     "decisions": null
+    },
+    "20": {
+     "total_requests": 120,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 10.859265923426332,
+     "p90_ttft": 23.930250618141145,
+     "p99_ttft": 36.224266472738236,
+     "median_ttft": 7.9571597571484745,
+     "max_ttft": 38.797392015345395,
+     "average_tpot": 0.051732653871308654,
+     "p90_tpot": 0.0833400525986021,
+     "p99_tpot": 0.09987583423378636,
+     "median_tpot": 0.04997508273084829,
+     "max_tpot": 0.1007866950757906,
+     "average_itl": 0.15664971107927855,
+     "p90_itl": 0.9876703079789877,
+     "p99_itl": 1.156166696920991,
+     "median_itl": 0.03577794972807169,
+     "max_itl": 1.2253190828487277,
+     "average_latency": 36.67386020520935,
+     "p90_latency": 62.3260389608331,
+     "p99_latency": 73.6486369036138,
+     "median_latency": 33.18451508600265,
+     "max_latency": 82.42270151572302,
+     "input_token_throughput": 3084.535666454687,
+     "output_token_throughput": 101.13231693294057,
+     "throughput": 0.20226463386588112,
+     "cache_hit_rate": 0.486679781420765,
+     "decisions": null
+    }
+   }
+  }
+ },
+ "startup_s": 126.06184244155884,
+ "pools": {
+  "version": "0.0.0.dev21955+g5added2da",
+  "kv_pool_tokens": 363212,
+  "max_running": 8,
+  "page_size": 1,
+  "context_len": 122880,
+  "model_path": "/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4",
+  "mamba_slots": 32,
+  "host_kv_tokens": 553432,
+  "host_state_slots": 61,
+  "weights_gb": 9.1,
+  "free_after_init_gb": 1.3
+ },
+ "status": "ok"
+}

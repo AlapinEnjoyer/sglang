@@ -1,0 +1,190 @@
+{
+ "name": "fork-best-ram",
+ "server_cmd": "/home/ubuntu/experiments/sglang/.venv/bin/sglang serve --model-path /home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4 --served-model-name local --tp 2 --host 127.0.0.1 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8 --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through --mem-fraction-static 0.87 --max-mamba-cache-size 64 --speculative-draft-model-quantization fp8 --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt --port 30000",
+ "env": {
+  "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+  "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1",
+  "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": "/home/ubuntu/hicache-studio",
+  "SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE": "40G"
+ },
+ "steps": {
+  "cache": {
+   "rows": [
+    {
+     "request": "turn 1 (new prompt)",
+     "prompt": 4000,
+     "cached": 0,
+     "reusable": 0
+    },
+    {
+     "request": "same prompt again",
+     "prompt": 4000,
+     "cached": 3968,
+     "reusable": 4000
+    },
+    {
+     "request": "turn 2 (prompt + output + new)",
+     "prompt": 5200,
+     "cached": 4096,
+     "reusable": 4200
+    }
+   ],
+   "ok": true
+  },
+  "burst": {
+   "cells": {
+    "32768x1": {
+     "context_len": 32768,
+     "users": 1,
+     "max_new_tokens": 512,
+     "all_concurrent": true,
+     "ttft_first": 16.964703687932342,
+     "ttft_last": 16.964703687932342,
+     "prefill_tps_first_user": 1931.6886318995444,
+     "prefill_tps_all": 1931.6886318995444,
+     "decode_tps_per_user": 105.7805750331027,
+     "decode_tps_total": 105.7805750331027,
+     "decode_tps_slowest_user": 105.7805750331027,
+     "decode_tps_while_others_prefill": null,
+     "accept_length": 2.5805932629462043
+    },
+    "32768x4": {
+     "context_len": 32768,
+     "users": 4,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.39171196753159,
+     "ttft_last": 76.53467488987371,
+     "prefill_tps_first_user": 1884.168058717217,
+     "prefill_tps_all": 1712.5886449595755,
+     "decode_tps_per_user": 78.67392750905947,
+     "decode_tps_total": 314.69571003623787,
+     "decode_tps_slowest_user": 66.86935275427922,
+     "decode_tps_while_others_prefill": 10.327665896696827,
+     "accept_length": 2.8066486551851426
+    },
+    "32768x8": {
+     "context_len": 32768,
+     "users": 8,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.438596713356674,
+     "ttft_last": 159.68574976501986,
+     "prefill_tps_first_user": 1879.0512341223957,
+     "prefill_tps_all": 1641.6242897722009,
+     "decode_tps_per_user": 58.80166288648252,
+     "decode_tps_total": 470.41330309186014,
+     "decode_tps_slowest_user": 50.792228228024044,
+     "decode_tps_while_others_prefill": 10.130489913945368,
+     "accept_length": 3.484086600603188
+    }
+   },
+   "skipped": [],
+   "error": null
+  },
+  "multiturn": {
+   "ceiling": 0.7377049180327869,
+   "settings": {
+    "clients": [
+     10,
+     20
+    ],
+    "rounds": 6,
+    "request_length": 4000,
+    "output_length": 500,
+    "request_rate": 0.5,
+    "max_parallel": 8,
+    "decision_rate": 0.0,
+    "session_ids": false,
+    "priority": null
+   },
+   "runs": {
+    "10": {
+     "total_requests": 60,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 4.27858613684463,
+     "p90_ttft": 7.174202237743884,
+     "p99_ttft": 11.46404604613781,
+     "median_ttft": 3.867107240948826,
+     "max_ttft": 11.46404604613781,
+     "average_tpot": 0.03372581357221289,
+     "p90_tpot": 0.04456173334651457,
+     "p99_tpot": 0.050432603308587565,
+     "median_tpot": 0.03447595798785617,
+     "max_tpot": 0.05366118529807769,
+     "average_itl": 0.10568828555048199,
+     "p90_itl": 0.04650504840537906,
+     "p99_itl": 1.1821463932283223,
+     "median_itl": 0.036464668810367584,
+     "max_itl": 1.2272324487566948,
+     "average_latency": 21.107767109378862,
+     "p90_latency": 27.862325055990368,
+     "p99_latency": 31.32044378714636,
+     "median_latency": 22.414371740072966,
+     "max_latency": 31.32044378714636,
+     "input_token_throughput": 4985.216004719608,
+     "output_token_throughput": 163.44970507277404,
+     "throughput": 0.3268994101455481,
+     "cache_hit_rate": 0.7302295081967213,
+     "decisions": null
+    },
+    "20": {
+     "total_requests": 120,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 5.305855692989038,
+     "p90_ttft": 10.266111004166305,
+     "p99_ttft": 17.382464040070772,
+     "median_ttft": 3.989336849655956,
+     "max_ttft": 18.434430323075503,
+     "average_tpot": 0.03661787846400486,
+     "p90_tpot": 0.05316923529764485,
+     "p99_tpot": 0.06390636702910821,
+     "median_tpot": 0.038152051603847104,
+     "max_tpot": 0.06706325585612344,
+     "average_itl": 0.11499847696536569,
+     "p90_itl": 0.047865426167845726,
+     "p99_itl": 1.179522676859051,
+     "median_itl": 0.03696827217936516,
+     "max_itl": 1.2241762350313365,
+     "average_latency": 23.578177046527465,
+     "p90_latency": 34.474971706047654,
+     "p99_latency": 43.49674737500027,
+     "median_latency": 23.061757526826113,
+     "max_latency": 45.43401263700798,
+     "input_token_throughput": 4510.252934712449,
+     "output_token_throughput": 147.87714540040818,
+     "throughput": 0.29575429080081633,
+     "cache_hit_rate": 0.6913398907103825,
+     "decisions": null
+    }
+   }
+  }
+ },
+ "startup_s": 121.0644805431366,
+ "pools": {
+  "version": "0.0.0.dev21955+g5added2da",
+  "kv_pool_tokens": 286604,
+  "max_running": 8,
+  "page_size": 1,
+  "context_len": 122880,
+  "model_path": "/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4",
+  "mamba_slots": 64,
+  "host_kv_tokens": 436704,
+  "host_state_slots": 113,
+  "weights_gb": 9.1,
+  "free_after_init_gb": 1.36
+ },
+ "status": "ok"
+}

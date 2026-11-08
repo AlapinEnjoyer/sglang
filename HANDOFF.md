@@ -445,6 +445,8 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
   - With 20 rotating sessions: 32 slots give 0.42 hits, 48 give 0.64, and 64 give 0.68,
     against a 0.738 ceiling.
   - `--hicache-size` splits host RAM between KV and state in proportion to the GPU pools.
+  - At 32 slots, vanilla against the fork is noise: 0.42-0.52 across runs, in either order.
+    The 64-slot result reproduced (0.684, 0.691).
 - **The HiCache `file` storage tier works for this hybrid model, GDN state included.**
   - A 30k session comes back after a flush in 0.78 s, and after a server restart in 9 s on
     this VM's 131 MB/s disk. Cold prefill is about 16 s.

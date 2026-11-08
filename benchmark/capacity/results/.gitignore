@@ -1,4 +1,5 @@
-# Studio runs: keep report.md, summary.json, machine.json and burst/results.jsonl.
+# Studio runs: keep report.md, summary.json (with burst medians and multi-turn summaries),
+# machine.json and suite.toml. Raw *.jsonl is ignored repo-wide.
 *.log
 gsm8k/
 server_info.json
