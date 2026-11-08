@@ -1,0 +1,104 @@
+{
+ "name": "s32-path2",
+ "server_cmd": "/home/ubuntu/experiments/sglang/.venv/bin/sglang serve --model-path /home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4 --served-model-name local --tp 2 --host 127.0.0.1 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --mem-fraction-static 0.87 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8 --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec --speculative-draft-model-quantization fp8 --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through --max-mamba-cache-size 32 --mamba-max-states-per-path 2 --port 30000",
+ "env": {
+  "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+  "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1",
+  "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": "/home/ubuntu/hicache-studio",
+  "SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE": "15G",
+  "SGLANG_HICACHE_FILE_BACKEND_MIN_FREE_SPACE": "10G"
+ },
+ "steps": {
+  "cache": {
+   "rows": [
+    {
+     "request": "turn 1 (new prompt)",
+     "prompt": 4000,
+     "cached": 0,
+     "reusable": 0
+    },
+    {
+     "request": "same prompt again",
+     "prompt": 4000,
+     "cached": 3968,
+     "reusable": 4000
+    },
+    {
+     "request": "turn 2 (prompt + output + new)",
+     "prompt": 5200,
+     "cached": 4096,
+     "reusable": 4200
+    }
+   ],
+   "ok": true
+  },
+  "multiturn": {
+   "ceiling": 0.7377049180327869,
+   "settings": {
+    "clients": [
+     20
+    ],
+    "rounds": 6,
+    "request_length": 4000,
+    "output_length": 500,
+    "request_rate": 0.5,
+    "max_parallel": 8,
+    "decision_rate": 0.0,
+    "session_ids": false,
+    "priority": null
+   },
+   "runs": {
+    "20": {
+     "total_requests": 120,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 9.307951390867432,
+     "p90_ttft": 21.663070857990533,
+     "p99_ttft": 28.483058204874396,
+     "median_ttft": 6.185090431012213,
+     "max_ttft": 32.284289073199034,
+     "average_tpot": 0.04735316694102113,
+     "p90_tpot": 0.07758323258070839,
+     "p99_tpot": 0.09873123504723495,
+     "median_tpot": 0.04497916170373514,
+     "max_tpot": 0.09913282087054066,
+     "average_itl": 0.14480894790012705,
+     "p90_itl": 0.9470174931921065,
+     "p99_itl": 1.1561323660425842,
+     "median_itl": 0.03571443725377321,
+     "max_itl": 1.2247823630459607,
+     "average_latency": 32.93718169443697,
+     "p90_latency": 58.77287349104881,
+     "p99_latency": 68.5769825540483,
+     "median_latency": 31.02090771915391,
+     "max_latency": 73.15888455463573,
+     "input_token_throughput": 3299.026603751231,
+     "output_token_throughput": 108.16480668036823,
+     "throughput": 0.21632961336073647,
+     "cache_hit_rate": 0.5350819672131147,
+     "decisions": null
+    }
+   }
+  }
+ },
+ "startup_s": 111.05145239830017,
+ "pools": {
+  "version": "0.0.0.dev21955+g5added2da",
+  "kv_pool_tokens": 363212,
+  "max_running": 8,
+  "page_size": 1,
+  "context_len": 122880,
+  "model_path": "/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4",
+  "mamba_slots": 32,
+  "host_kv_tokens": 553432,
+  "host_state_slots": 61,
+  "weights_gb": 9.1,
+  "free_after_init_gb": 1.3
+ },
+ "status": "ok"
+}

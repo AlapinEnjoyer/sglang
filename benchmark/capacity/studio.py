@@ -37,7 +37,7 @@ import studio_plan as sp
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-STEP_ORDER = ("cache", "gsm8k", "burst", "multiturn", "disk")
+STEP_ORDER = ("cache", "gsm8k", "burst", "multiturn", "disk", "chat")
 
 
 # ---------------------------------------------------------------- suite format
@@ -78,12 +78,21 @@ class DiskStep(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     restart: bool = True
 
 
+class ChatStep(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    turns: int = 4
+    user_words: int = 600
+    max_tokens: int = 2048
+    # Clients that send reasoning_content back, and clients that drop it.
+    keep_reasoning: List[bool] = msgspec.field(default_factory=lambda: [True, False])
+
+
 class Steps(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     cache: Optional[CacheStep] = None
     gsm8k: Optional[Gsm8kStep] = None
     burst: Optional[BurstStep] = None
     multiturn: Optional[MultiturnStep] = None
     disk: Optional[DiskStep] = None
+    chat: Optional[ChatStep] = None
 
 
 class StudioConfig(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -472,7 +481,7 @@ def step_multiturn(server: Server, step: MultiturnStep, out: Path) -> Dict[str, 
     }
 
 
-def _generate(base_url: str, ids: List[int], max_new: int):
+def _generate(base_url: str, ids: List[int], max_new: int, **extra):
     t0 = time.perf_counter()
     r = requests.post(
         f"{base_url}/generate",
@@ -483,6 +492,7 @@ def _generate(base_url: str, ids: List[int], max_new: int):
                 "max_new_tokens": max_new,
                 "ignore_eos": True,
             },
+            **extra,
         },
         timeout=1800,
     )
@@ -490,38 +500,136 @@ def _generate(base_url: str, ids: List[int], max_new: int):
     return r.json(), time.perf_counter() - t0
 
 
-def _next_turn(base_url: str, history: List[int]) -> Dict[str, Any]:
-    turn = history + [random.randrange(1000, 100000) for _ in range(100)]
-    out, dt = _generate(base_url, turn, 1)
+def _probe(
+    base_url: str, ids: List[int], cache_salt: Optional[str] = None
+) -> Dict[str, Any]:
+    """First-token time, cached tokens and the top-20 next-token logprobs for `ids`."""
+    extra = {
+        "return_logprob": True,
+        "top_logprobs_num": 20,
+        "logprob_start_len": len(ids),
+    }
+    if cache_salt:
+        # A fresh salt is its own cache namespace: the same tokens, recomputed from scratch.
+        extra["cache_salt"] = cache_salt
+    out, dt = _generate(base_url, ids, 1, **extra)
+    m = out["meta_info"]
+    top = {tid: lp for lp, tid, *_ in m["output_top_logprobs"][0]}
     return {
-        "prompt": out["meta_info"]["prompt_tokens"],
-        "cached": out["meta_info"]["cached_tokens"],
+        "prompt": m["prompt_tokens"],
+        "cached": m["cached_tokens"],
         "first_token_s": dt,
+        "top": top,
+    }
+
+
+def _against(ref: Dict[str, Any], probe: Dict[str, Any]) -> Dict[str, Any]:
+    """Restored-state check: same top token, and how far the reference top-5 logprobs moved."""
+    ref_top = sorted(ref["top"].items(), key=lambda kv: -kv[1])
+    got_top = max(probe["top"].items(), key=lambda kv: kv[1])[0]
+    diffs = [
+        abs(lp - probe["top"][tid]) for tid, lp in ref_top[:5] if tid in probe["top"]
+    ]
+    return {
+        **{k: v for k, v in probe.items() if k != "top"},
+        "top1_same": got_top == ref_top[0][0],
+        "max_logprob_diff": max(diffs) if len(diffs) == 5 else None,
     }
 
 
 def step_disk(server: Server, step: DiskStep, out: Path) -> Dict[str, Any]:
     rng = random.Random()
-    fresh = lambda: [rng.randrange(1000, 100000) for _ in range(step.session_len)]  # noqa: E731
-    cold = _next_turn(server.base_url, fresh())
-    prompt = fresh()
+    prompt = [rng.randrange(1000, 100000) for _ in range(step.session_len)]
     first, _ = _generate(server.base_url, prompt, 200)
-    history = prompt + first["output_ids"]
+    # The next turn: history plus new user tokens, identical for every probe.
+    turn = (
+        prompt + first["output_ids"] + [rng.randrange(1000, 100000) for _ in range(100)]
+    )
+    ref = _probe(server.base_url, turn, cache_salt=f"studio-{rng.getrandbits(64):x}")
     res = {
         "session_len": step.session_len,
-        "cold": cold,
-        "gpu_hit": _next_turn(server.base_url, history),
+        "cold": {**_against(ref, ref)},
+        "gpu_hit": _against(ref, _probe(server.base_url, turn)),
     }
     # Flushing empties the GPU and host tiers; it waits until pending storage writes finish.
     cb.flush_cache(server.base_url)
-    res["after_flush"] = _next_turn(server.base_url, history)
+    res["after_flush"] = _against(ref, _probe(server.base_url, turn))
     if step.restart:
         server.stop()
         why = server.start()
         res["after_restart"] = (
-            {"error": why} if why else _next_turn(server.base_url, history)
+            {"error": why} if why else _against(ref, _probe(server.base_url, turn))
         )
     return res
+
+
+_CHAT_WORDS = (
+    "the system logs show a timeout when the worker pool drains the queue during a deploy "
+    "and the retry budget runs out before the database replica catches up with the primary"
+).split()
+
+
+def _chat_conversation(
+    server: Server, step: ChatStep, keep: bool, model: str
+) -> List[Dict[str, Any]]:
+    rng = random.Random()
+    messages: List[Dict[str, Any]] = []
+    turns = []
+    prev_reusable = 0
+    for t in range(step.turns):
+        words = " ".join(rng.choice(_CHAT_WORDS) for _ in range(step.user_words))
+        messages.append(
+            {
+                "role": "user",
+                "content": f"Case {rng.getrandbits(48):x}: {words}. "
+                "Summarize the likely root cause in two sentences.",
+            }
+        )
+        r = requests.post(
+            f"{server.base_url}/v1/chat/completions",
+            timeout=1800,
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": step.max_tokens,
+                "temperature": 0.6,
+                "top_p": 0.95,
+            },
+        )
+        r.raise_for_status()
+        body = r.json()
+        msg, usage = body["choices"][0]["message"], body["usage"]
+        details = usage.get("prompt_tokens_details") or {}
+        turns.append(
+            {
+                "turn": t + 1,
+                "prompt": usage["prompt_tokens"],
+                "cached": details.get("cached_tokens"),
+                "reusable": prev_reusable,
+            }
+        )
+        prev_reusable = usage["prompt_tokens"] + usage["completion_tokens"]
+        reply = {"role": "assistant", "content": msg.get("content") or ""}
+        if keep and msg.get("reasoning_content"):
+            reply["reasoning_content"] = msg["reasoning_content"]
+        messages.append(reply)
+    return turns
+
+
+def step_chat(server: Server, step: ChatStep, out: Path) -> Dict[str, Any]:
+    """Prefix reuse through /v1/chat/completions, where the template re-renders history.
+
+    `reusable` is everything the previous turn processed (prompt + completion). A client
+    that drops reasoning_content changes how the template renders that turn, so only
+    the part before it can match. cached is None unless the server runs --enable-cache-report.
+    """
+    model = requests.get(f"{server.base_url}/v1/models", timeout=60).json()["data"][0][
+        "id"
+    ]
+    return {
+        f"keep_reasoning={k}": _chat_conversation(server, step, k, model)
+        for k in step.keep_reasoning
+    }
 
 
 STEPS = {
@@ -530,6 +638,7 @@ STEPS = {
     "burst": step_burst,
     "multiturn": step_multiturn,
     "disk": step_disk,
+    "chat": step_chat,
 }
 
 
@@ -790,19 +899,22 @@ def _multiturn_table(runs: List[Dict[str, Any]]) -> List[str]:
 
 def _disk_table(runs: List[Dict[str, Any]]) -> List[str]:
     rows = [
-        "| Config | Session | Cold prefill | GPU hit | After flush (storage) | After restart |",
+        "| Config | Session | Recomputed (reference) | GPU hit | After flush (storage) | "
+        "After restart |",
         "|---|---|---|---|---|---|",
     ]
-    cell = lambda t: (
-        "-"
-        if not t
-        else (
-            t["error"][:40]
-            if "error" in t
-            # noqa: E731
-            else f"{t['first_token_s']:.2f} s, {t['cached']} cached"
-        )
-    )
+
+    def cell(t: Optional[Dict[str, Any]]) -> str:
+        if not t:
+            return "-"
+        if "error" in t:
+            return t["error"][:40]
+        text = f"{t['first_token_s']:.2f} s, {t['cached']} cached"
+        if "top1_same" in t:
+            same = "same top-1" if t["top1_same"] else "**top-1 differs**"
+            text += f", {same}, max dlogp {_f(t['max_logprob_diff'], '.3f')}"
+        return text
+
     for r in runs:
         for c in r["configs"]:
             d = c["steps"].get("disk")
@@ -812,6 +924,24 @@ def _disk_table(runs: List[Dict[str, Any]]) -> List[str]:
                     f"{cell(d['gpu_hit'])} | {cell(d['after_flush'])} | "
                     f"{cell(d.get('after_restart'))} |"
                 )
+    return rows
+
+
+def _chat_table(runs: List[Dict[str, Any]]) -> List[str]:
+    rows = [
+        "| Config | Client | Turn | Prompt | Cached | Reusable (prev prompt + output) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in runs:
+        for c in r["configs"]:
+            for client, turns in (c["steps"].get("chat") or {}).items():
+                if not isinstance(turns, list):
+                    continue
+                for t in turns:
+                    rows.append(
+                        f"| {c['name']} | {client} | {t['turn']} | {t['prompt']} | "
+                        f"{_f(t['cached'], 'd')} | {t['reusable']} |"
+                    )
     return rows
 
 
@@ -840,7 +970,19 @@ def write_report(run_dirs: List[Path], out: Path) -> None:
         "",
         "## Session restore from the storage tier",
         "",
+        "Each restore is checked against the same tokens recomputed from scratch (a fresh "
+        "cache_salt): a wrong or mismatched state changes the top token or moves logprobs "
+        "by far more than numerical noise (about 0.1).",
+        "",
         *_disk_table(runs),
+        "",
+        "## Chat clients: reuse through /v1/chat/completions",
+        "",
+        "The template re-renders history; a client that drops reasoning_content changes "
+        "the previous turn, so only the part before it can match. Cached needs "
+        "--enable-cache-report.",
+        "",
+        *_chat_table(runs),
         "",
         "## Server commands",
         "",

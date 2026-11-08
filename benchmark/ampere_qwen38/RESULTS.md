@@ -360,6 +360,64 @@ free space.
 
 - The fork with the user's flags held all 8 users at 0.87; at 0.90 it had crashed.
 
+### GDN snapshot behavior and options (`results/2xa4500-gdn-states`)
+
+**How the cache treats GDN snapshots** (read from `mem_cache/unified_cache/components/mamba.py`
+and `unified_radix_cache.py`):
+- **What a hit is.** It is the deepest radix node holding a snapshot, on the GPU or in
+  host RAM. KV can match further; the rest is recomputed from that snapshot, and a new
+  snapshot is saved there for next time.
+- **Where snapshots land.** Only on a grid of lcm(`--mamba-track-interval`, page size)
+  tokens, 256 here. Up to 255 tokens per turn are recomputed: the chat test below lost
+  60-250 per turn.
+- **What eviction does.** Evicting a snapshot from an internal node leaves a "tombstone"
+  (KV kept, no state). A returning session then falls back to the deepest surviving
+  snapshot on its path, often its previous turn. Only when no snapshot survives on the path
+  is it a full prefill. `cached_tokens` counts only the snapshot-backed part, so a KV-only
+  match never shows up as a hit.
+- **Storage restores under TP.** The ranks agree on the hit length by taking the minimum.
+  A restore whose GDN state did not arrive is discarded whole and recomputed, not loaded
+  half-way.
+
+**20 sessions, same workload as above** (ceiling 0.738; single runs, noise about +/-0.05):
+
+| GDN slots | Default (`results/2xa4500-20261108`) | `--mamba-max-states-per-path 2` |
+|---|---|---|
+| 32 | 0.487 | 0.535, 9.3 / 28.5 s TTFT |
+| 64 | 0.691 | **0.710**, 5.1 / 16.6 s TTFT |
+
+- **Path cap.** Capping a session's path at 2 snapshots frees slots for other sessions and
+  was better in both runs.
+- **int8 snapshots.** `--enable-int8-mamba-checkpoint` is rejected together with HiCache:
+  "the host-offload path is not int8-aware".
+
+**Restore correctness** (studio disk step). A 30k session's next-token top-20 logprobs were
+compared with the same tokens recomputed under a fresh `cache_salt`:
+
+| Path | Result |
+|---|---|
+| GPU hit | same top-1, max |dlogp| 0.052 over the reference top-5 |
+| Restored from disk after a flush | same top-1, max |dlogp| 0.031 |
+| Restored from disk after a restart | same top-1, max |dlogp| 0.031 |
+
+All three are at numerical-noise level: the restored states are the right ones. That run's
+after-flush restore took 13.8 s; earlier runs took 0.6-0.8 s from the page cache. On this
+VM's 131 MB/s disk the restore time depends on what the OS still caches.
+
+**Chat clients** (`/v1/chat/completions`, thinking on, 4 turns of about 700 new tokens):
+
+| Turn | Keeps `reasoning_content`: cached / reusable | Drops it: cached / reusable |
+|---|---|---|
+| 2 | 1536 / 1771 | 640 / 1519 |
+| 3 | 2560 / 2621 | 1344 / 1794 |
+| 4 | 3328 / 3444 | 1984 / 2375 |
+
+- **A client that drops `reasoning_content`** gets the previous turn re-rendered with an
+  empty think block. That no longer matches what was generated, so each turn recomputes
+  the whole previous answer. Its prompts are shorter, though: dropped thinking leaves the
+  history.
+- **`bench_multiturn` measures the best case.** It sends token ids, so it never hits this.
+
 ### Session restore from the storage tier (HiCache `file` backend)
 
 Setup: one 30k-token session, then the next turn's first-token time. "After flush" empties the

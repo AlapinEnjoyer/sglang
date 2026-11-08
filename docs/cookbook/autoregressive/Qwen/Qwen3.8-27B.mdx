@@ -319,6 +319,10 @@ row back to Auto.
   - **Mamba slots:** 3 per running user plus about 40 for idle sessions. Each returning
     session needs a saved GDN state, and `--hicache-size` gives host state slots in
     proportion to the GPU pools.
+  - **Snapshots per session:** `--mamba-max-states-per-path 2` keeps only each session's
+    newest snapshots. It raised the 20-session hit rate from 0.69 to 0.71 at 64 slots.
+  - **Chat clients:** send `reasoning_content` back with past assistant turns. Without it
+    the template renders an empty think block, and each turn recomputes the previous answer.
   - **Storage tier:** to keep sessions on disk, add `--page-size 64`,
     `--hicache-storage-backend file` and `--hicache-storage-prefetch-policy wait_complete`.
     Page size 1 writes one file per token. The default `timeout` policy discards

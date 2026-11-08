@@ -447,6 +447,14 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
   - `--hicache-size` splits host RAM between KV and state in proportion to the GPU pools.
   - At 32 slots, vanilla against the fork is noise: 0.42-0.52 across runs, in either order.
     The 64-slot result reproduced (0.684, 0.691).
+- **GDN snapshots** (RESULTS "GDN snapshot behavior").
+  - A hit is the deepest surviving snapshot. Eviction leaves KV-only tombstones and falls
+    back to an earlier snapshot, not to a full prefill.
+  - `--mamba-max-states-per-path 2` added about +0.02-0.05 hits.
+  - int8 snapshots are incompatible with HiCache.
+  - Restored states match a recompute: same top-1, |dlogp| <= 0.05.
+  - Chat clients must send `reasoning_content` back, or every turn recomputes the previous
+    answer.
 - **The HiCache `file` storage tier works for this hybrid model, GDN state included.**
   - A 30k session comes back after a flush in 0.78 s, and after a server restart in 9 s on
     this VM's 131 MB/s disk. Cold prefill is about 16 s.
