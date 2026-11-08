@@ -616,11 +616,33 @@ def check_storage_budget(spec: StudioSpec, cfg: StudioConfig) -> None:
         )
 
 
+def check_storage_hash_module() -> None:
+    """HiCache storage keys come from a C++ extension built on first use with OpenSSL.
+
+    Without the headers every storage lookup fails, and the server only logs
+    "HiCache storage query failed", so the tier silently never hits.
+    """
+    from sglang.srt.mem_cache.cpp_utils.native_hash import _load_native_hash_module
+
+    try:
+        _load_native_hash_module()
+    except RuntimeError as e:
+        raise SystemExit(
+            f"HiCache storage needs the OpenSSL headers ({e.__cause__ or e}). Install them:\n"
+            "  Debian/Ubuntu: sudo apt-get install -y libssl-dev\n"
+            "  RHEL/Fedora:   sudo dnf install -y openssl-devel"
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     spec = load_spec(args.suite)
-    for cfg in spec.configs:
-        if not args.only or cfg.name in args.only.split(","):
-            check_storage_budget(spec, cfg)
+    selected = [
+        c for c in spec.configs if not args.only or c.name in args.only.split(",")
+    ]
+    for cfg in selected:
+        check_storage_budget(spec, cfg)
+    if any("--hicache-storage-backend" in server_command(spec, c) for c in selected):
+        check_storage_hash_module()
     only = set(args.only.split(",")) if args.only else None
     out = (
         args.out_dir

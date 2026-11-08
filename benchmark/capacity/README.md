@@ -32,6 +32,15 @@ python benchmark/capacity/studio.py run benchmark/capacity/configs/studio-swift1
 python benchmark/capacity/studio.py report benchmark/capacity/results/<run> <run2> --out cmp.md
 ```
 
+**Prerequisites.**
+- `uv` (for `uvx`, which runs the pinned sgl-eval in its own environment).
+- For the storage tier (`--hicache-storage-backend`), the OpenSSL headers:
+  `sudo apt-get install -y libssl-dev` (Debian/Ubuntu) or `sudo dnf install -y openssl-devel`.
+  - SGLang builds its storage-key hash extension with them on first use, vanilla too.
+  - Without them every storage lookup fails, the log says "HiCache storage query failed",
+    and the tier never hits.
+  - `studio.py run` checks this before it launches a storage-tier config.
+
 **Planner.** It reads the checkpoint's safetensors headers and `config.json`, then
 computes per GPU:
 - **Weights and per-token KV:** from the headers and the attention config.

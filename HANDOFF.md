@@ -463,6 +463,22 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
   - `test_dflash_logits.py` (5 tests): the stubs lack `hot_candidate_head`.
   - `test_fp8_lm_head_mxfp8.py`: the FP8 dense-prefill path reads `input_size_per_partition`,
     which an FP8 `ParallelLMHead` lacks. That is a real bug.
+- **What the 3.6 PR is.**
+  - It moves the existing `init_token_map()` and `init_lm_head()` calls from
+    `alloc_memory_pool` to the draft worker's `__init__`, ahead of pool sizing.
+  - What gets shared is unchanged. `init_lm_head` already keeps an EAGLE3 draft's own head
+    unless `load_lm_head_from_target`, and the token map already takes its rows from the
+    target head. Draft weights still load in full and are swapped right after, so the
+    load-time peak is the same as upstream.
+  - Still to do:
+    - Apply the same move to `standalone_worker_v2` and the MiMo-V2 worker, which still
+      share late.
+    - Test every algorithm: EAGLE, EAGLE3, standalone, multi-layer EAGLE, and PP.
+    - Reserve the activation headroom explicitly.
+    - Measure on a small card and on an 80 GB card. For this model the duplicate is about
+      5 GB in total, which on an 80 GB card at TP1 is roughly 9% more KV pool.
+  - Upstream history shows no attempt to move these calls; the three commits that touch
+    them only add the call to new workers.
 - **PRs in order of value.** One change each, with accuracy and speed results per the PR
   template:
   1. Draft embed/lm_head sharing (3.6), with explicit activation headroom.

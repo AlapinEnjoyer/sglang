@@ -322,7 +322,8 @@ row back to Auto.
   - **Storage tier:** to keep sessions on disk, add `--page-size 64`,
     `--hicache-storage-backend file` and `--hicache-storage-prefetch-policy wait_complete`.
     Page size 1 writes one file per token. The default `timeout` policy discards
-    restores from a cold disk. The file backend needs the OpenSSL headers (`libssl-dev`).
+    restores from a cold disk. The file backend needs the OpenSSL headers
+    (`sudo apt-get install -y libssl-dev`); without them every storage lookup fails.
     `SGLANG_HICACHE_FILE_BACKEND_MAX_SIZE` applies per TP rank, so budget TP times it on disk.
 
   ```bash
