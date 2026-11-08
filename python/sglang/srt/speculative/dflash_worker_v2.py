@@ -43,12 +43,11 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.model_executor.forward_mode import CaptureHiddenMode, ForwardMode
 from sglang.srt.model_executor.model_runner import SamplingPrewarmResult
-from sglang.srt.models.dflash import DFlash2DraftModel
 from sglang.srt.model_executor.runner_utils.pool import (
     disable_graph_pool_borrow,
     graph_pool_borrow_enabled,
 )
-from sglang.srt.models.dflash import DFlashMLAAttention
+from sglang.srt.models.dflash import DFlash2DraftModel, DFlashMLAAttention
 from sglang.srt.platforms import current_platform
 from sglang.srt.runtime_context import (
     get_exec,
@@ -2255,7 +2254,9 @@ class DFlashWorkerV2(BaseSpecWorker):
             )
 
         model_runner = self.target_worker.model_runner
-        if _uses_gdn_replayssm(getattr(model_runner.req_to_token_pool, "mamba_pool", None)):
+        if _uses_gdn_replayssm(
+            getattr(model_runner.req_to_token_pool, "mamba_pool", None)
+        ):
             # GDN ReplaySSM keeps verify drafts in a ring instead of intermediate
             # states; the generic commit advances or folds it (chain layout).
             bs = commit_lens.shape[0]

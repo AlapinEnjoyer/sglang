@@ -2,6 +2,7 @@
 tool-calling loops. Prefills the prefix once, then times deltas of several sizes.
 Usage: turn_latency.py [--port 8000] [--prefix 30000] [--deltas 128,512,2048] [--reps 3]
 """
+
 import argparse
 import random
 import time
@@ -22,8 +23,13 @@ def main():
 
     def ttft(ids):
         t = time.time()
-        r = requests.post(url + "/generate", json={
-            "input_ids": ids, "sampling_params": {"max_new_tokens": 1, "temperature": 0}}).json()
+        r = requests.post(
+            url + "/generate",
+            json={
+                "input_ids": ids,
+                "sampling_params": {"max_new_tokens": 1, "temperature": 0},
+            },
+        ).json()
         return time.time() - t, r["meta_info"].get("cached_tokens", 0)
 
     requests.post(url + "/flush_cache")
@@ -36,7 +42,9 @@ def main():
             t, c = ttft(prefix + tok(d))
             times.append(t)
             cached.append(c)
-        print(f"delta {d:5d}: ttft median {sorted(times)[len(times)//2]*1e3:7.1f} ms  cached {cached}")
+        print(
+            f"delta {d:5d}: ttft median {sorted(times)[len(times) // 2] * 1e3:7.1f} ms  cached {cached}"
+        )
 
 
 if __name__ == "__main__":

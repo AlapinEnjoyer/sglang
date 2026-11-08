@@ -4,6 +4,7 @@ The draft lm_head is restricted to the K most frequent tokens; verification stil
 full target vocab, so outputs are unchanged and only draft acceptance can move.
 Usage: build_token_map.py --tokenizer PATH --out map.pt [--size 32768] [--max-convs 40000]
 """
+
 import argparse
 import collections
 import json

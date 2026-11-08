@@ -975,7 +975,9 @@ def shard_hot_token_head(
     my_tokens = hot[local_rank * per_rank : (local_rank + 1) * per_rank]
     # (owner rank, index in owner's list) of each row this rank keeps.
     owner_pos = {t: (r, j) for r, o in enumerate(owned) for j, t in enumerate(o)}
-    my_rows = torch.empty((per_rank, head.shape[1]), dtype=head.dtype, device=head.device)
+    my_rows = torch.empty(
+        (per_rank, head.shape[1]), dtype=head.dtype, device=head.device
+    )
     # Runs after the KV pool is sized, so gather in row chunks to bound the transient.
     chunk = _HOT_HEAD_GATHER_CHUNK_ROWS
     mine = owned[local_rank]
@@ -984,7 +986,9 @@ def shard_hot_token_head(
         local = torch.zeros((rows, head.shape[1]), dtype=head.dtype, device=head.device)
         n_local = max(0, min(rows, len(mine) - c0))
         if n_local > 0:
-            idx = torch.tensor(mine[c0 : c0 + n_local], device=head.device) - local_start
+            idx = (
+                torch.tensor(mine[c0 : c0 + n_local], device=head.device) - local_start
+            )
             local[:n_local] = head[idx]
         gathered = all_gather(local)
         dst, src = [], []
