@@ -277,3 +277,122 @@ command (preset `A`), so it is today's baseline, not the October one. Accept len
   asserts the fused fp8 Triton kernel ran, which is impossible below SM89. Upstream fails all 21 tests in
   `test_prefix_valid_fp8_pool.py` on SM86 (`fp8e4nv not supported`); the branch fails only those 2.
 
+## Eight agent users with HiCache, 2026-11-08 (branch `ampere-opt` at `085978f852`)
+
+Setup:
+- **Command:** the user's 8-user command on Swift-1.5 INT4 at TP2. That is 120k context,
+  `--max-running-requests 8`, bf16 GDN state, `extra_buffer_lazy` with
+  `SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1`, mixed chunk, `--prefill-decode-interval 4`,
+  MTP 3/1/4 with ReplaySSM, and HiCache with `--hicache-size 12`.
+- **Vanilla:** sglang 0.5.23.dev20261018 (git `14ad64c411`), the `../inference/sglang-inf`
+  venv. The October tests further down used pip 0.5.21.
+- **Burst:** `capacity_bench.py --context-lens 32k --users 1,4,8 --repeats 2`, at temperature
+  1.0, top_p 0.95, top_k 20.
+- **GSM8K:** sgl-eval 0.1.3, 250 examples, greedy, thinking off.
+- **Reproduce:** `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
+
+| Config | KV pool | GSM8K | 1 user | 4 users, total | 8 users, total |
+|---|---|---|---|---|---|
+| vanilla 0.5.23.dev, mem 0.90 | 264k | 97.6% | 82.7 tok/s | 272 | does not fit (7 users of 32k) |
+| fork, same flags, mem 0.90 | 408k | 97.6% | 88.0 | 267 | **OOM: server crashed** |
+| fork + FP8 draft + 32k map, mem 0.90 | 401k | 97.6% | 103.6 | 316 | 454 |
+| **fork + FP8 draft + 32k map, mem 0.87** | 363k | 98.0% | **107.4** | **308** | **462** |
+| same + `--language-model-only` | 398k | 97.2% | 110.8 | 304 | 461 |
+
+- **The OOM.** It happened in `_draft_extend_for_prefill`: a 2048-token prefill chunk next to
+  7 decoding users, with 0.64 GiB left free after init.
+  - The fork frees the draft's duplicate embed and lm_head before it sizes the pools. That
+    leaves about 1.9 GB per GPU less headroom than vanilla, which had 3.2 GB free after init.
+  - Without the token map, the draft's prefill logits are chunk x 248k / TP in fp32, about
+    1 GB.
+  - So at 0.87 (1.3 GiB free) every run passed.
+- **Where the decode gain comes from.** About a quarter is the fork's general fixes
+  (82.7 -> 88.0 tok/s). About three quarters are the token map plus the FP8 draft
+  (88.0 -> 103.6). The capacity gain (KV pool +40-55%) is independent of the map.
+
+### Multi-turn sessions: GDN state slots set the hit rate
+
+Workload: `bench_multiturn.py`, 6 rounds of 4000 new and 500 output tokens, 0.5 requests/s,
+8 running at most. Its hit-rate ceiling is 0.738, because each round's new tokens are uncached.
+The 20-session runs are overloaded: the server completes only 0.18-0.20 requests/s.
+
+| Config | GDN slots GPU / host | KV pool GPU / host | 10 sessions: hits, avg / P99 TTFT | 20 sessions: hits, avg / P99 TTFT |
+|---|---|---|---|---|
+| vanilla, 32 slots | 32 / about 78 | 264k / 515k | 0.730, 4.3 / 9.9 s | 0.518, 10.6 / 37.3 s |
+| fork (FP8 draft, map), 32 slots | 32 / 61 | 363k / 553k | 0.720, 4.4 / 9.6 s | 0.419, 14.6 / 47.5 s |
+| fork, 48 slots | 48 / 87 | 325k / 495k | - | 0.635, 6.3 / 17.8 s |
+| fork, 64 slots | 64 / 113 | 287k / 437k | - | **0.684, 5.4 / 14.0 s** |
+| fork, 48 slots, page 64 | 48 / 87 | 325k / 495k | - | 0.523, 10.5 / 44.1 s |
+| fork, 64 slots, page 64 (two runs) | 64 / 113 | 287k / 437k | - | 0.669 and 0.657, 6.3-6.6 / 25-32 s |
+| fork, 48 slots, page 64, `--hicache-size 4` | 48 / 29 | 325k / 165k | - | 0.324, 17.6 / 54.5 s |
+| same + file storage tier | 48 / 29 + disk | 325k / 165k + disk | - | 0.472, 12.6 / 33.0 s |
+
+- **Why the slots matter.** A returning session hits only if its saved GDN state survived;
+  KV alone is not enough.
+  - Each running request holds 3 slots, so 32 slots leave 8 for idle sessions.
+  - `--hicache-size` is split between host KV and host state in proportion to the GPU pools.
+    The fork's larger KV pool therefore takes host state slots away: 61 against vanilla's 78.
+- **More slots win.** 64 slots cost 76k GPU KV tokens and are the best setting found.
+- **Noise.** Single runs of this overloaded test vary by several points. Page size 64 against
+  1 at 64 slots (0.66-0.67 against 0.68) is within that noise.
+- **The storage tier.** It recovers most of what a small RAM tier loses (0.32 -> 0.47), even
+  on this VM's 131 MB/s disk.
+
+### Session restore from the storage tier (HiCache `file` backend)
+
+Setup: one 30k-token session, then the next turn's first-token time. "After flush" empties the
+GPU and host tiers, so the session has to come back from disk. "After restart" is a new server
+process with the same storage directory.
+
+| Setting | Files written | Cold prefill | GPU hit | After flush | After restart |
+|---|---|---|---|---|---|
+| page 1, prefetch `timeout` (default) | 120,934 x 17 KB | ~16-17 s | 0.26 s | 2.5 s | prefetch discarded at the deadline (8.4k of 30k loaded): 0 cached, 23.9 s |
+| page 1, `wait_complete` | same | ~16-17 s | 0.27 s | 2.7 s | 22.6 s (slower than cold) |
+| **page 64, `wait_complete`** | 1,962 | ~16-17 s | 0.26 s | **0.78 s** | **9.0 s** |
+
+- **Requirements:**
+  - The storage hash is a C++ extension that needs `openssl/sha.h`, so install `libssl-dev`.
+    Without it every storage query fails ("HiCache storage query failed"), and the only sign
+    is in the server log.
+  - `/flush_cache` refuses while storage writes are pending, so retry it.
+- **The restart number is this VM's disk.** It reads 131 MB/s with O_DIRECT, against
+  about 1.1 GB per GPU for this session. NVMe at 3-7 GB/s should restore it in well under
+  a second. The after-flush number is served from the OS page cache.
+
+### Earlier vanilla tests on 2x A4500 (pip 0.5.21, 2026-10-17)
+
+| Test | Result |
+|---|---|
+| fp32 vs bf16 GDN state (`--mamba-ssm-dtype`) | KV pool 150k -> 245k tokens (+63%); GSM8K (few_shot_gsm8k, 1319) 93.0% vs 94.6%; verify steps/s unchanged (30.4 / 23.8 at 1 / 4 users) |
+| `extra_buffer` vs `extra_buffer_lazy`, with and without `SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK` | all four reuse the cache; 4 sessions hit 0.729 of 0.738 |
+| `lru` vs `tlru` (threshold 20k), 10 sessions over a 150k pool | 0.219 vs 0.194 hits; `tlru` does not help on this hybrid model |
+| 4 sessions + `/v1/decisions` at 0.5/s (about 2k-token unique inputs) | hits unchanged (0.730); session TPOT 19 -> 32-35 ms; priority scheduling + priority eviction cut session P99 TTFT 10.0 -> 7.1 s; session references made no difference at this load |
+
+### Third-party checkpoint: `hotdogs/Qwen3.8-27B-abliterated-AWQ-INT4`
+
+- **It does not load as published, at any TP.** Its recipe ignored only `lm_head`, so the GDN
+  `in_proj_a/b` layers (48 rows) were quantized. Marlin repack needs N % 64 == 0.
+  - `benchmark/ampere_qwen38/fix_awq_gdn_ba.py` writes a copy with those 96 tensors
+    dequantized to bf16 and added to the ignore list. The checkpoint is AWQ-smoothed (norm
+    weights scaled down, linears scaled up), and the copy is consistent with that.
+- **It ships no MTP head.** The bf16 parent's MTP tensors (abliteration also edited MTP
+  `o_proj`/`down_proj`, +1.7%) can be fetched with ranged reads of its last shard and saved
+  as `model_mtp.safetensors`. Swift's MTP head gives the same acceptance.
+- **Quality:** few-shot GSM8K is 62.9%. 31.5% of the answers are empty, because the model
+  ends right after `Answer:` without a chat template. On the answers it gives it scores
+  91.8%.
+
+### PR readiness check (2026-11-08)
+
+- **pre-commit:** 8 branch files failed (isort, ruff format, whitespace); fixed in the commit
+  that follows `085978f852`.
+- **Tests:** compared against `main` on SM86 with the same venv, over the same 12 failing
+  files.
+  - The branch breaks 6 tests, which need fixing before the related PRs:
+    - `test_dflash_logits.py` (5): the DFlash2 hot-candidate code reads `hot_candidate_head`,
+      which the test stubs do not define.
+    - `test_fp8_lm_head_mxfp8.py::test_marlin_uses_the_converted_block_size`: the FP8 dense
+      prefill path reads `input_size_per_partition`, which an FP8 `ParallelLMHead` lacks.
+      That is a real bug.
+  - The branch fixes 3 tests that fail on `main` on SM86 (`test_prefix_valid_fp8_pool.py`).
+  - The other 36 failures are shared with `main`; they are Blackwell- or Hopper-only paths.

@@ -270,7 +270,7 @@ row back to Auto.
   - **Mamba state slots:** set `--max-mamba-cache-size` (8 for one user, about 3 per
     concurrent user). Left unset at `--max-running-requests 1`, it sized 39 slots,
     2.8GB per GPU taken from the KV pool.
-  
+
   For one user, the fastest setup is DFLASH2 with a 64k token map, an FP8 draft,
   ReplaySSM and 5 mamba slots. Its KV pool is 294k tokens, enough for the full
   262k context. On 2x RTX A4500 it decodes 173 tok/s for 1k in / 1k out, 137 tok/s
@@ -297,7 +297,7 @@ row back to Auto.
   8 slots and `--language-model-only`. That gives a 476k-token pool and
   133 / 112 / 142 tok/s. MTP is also faster than DFLASH2 on code when
   `--language-model-only` is set.
-  
+
   Prefill chunks of 2048 or more tokens switch from Marlin to dequant + cuBLAS on
   SM8x (`SGLANG_MARLIN_DEQUANT_GEMM_MIN_M`, 0 disables). Measured single-user
   decode, 1k in / 1k out: 95 tok/s with the plain MTP 3/1/4 recipe, 124 tok/s with
@@ -309,6 +309,37 @@ row back to Auto.
   pool. Only MTP holds four 80k-token requests. Full numbers are in
   `benchmark/ampere_qwen38/RESULTS.md`. Under sustained prefill the A4500 sits at its
   200W power cap, so prefill throughput on this card is power-bound.
+
+  For up to 8 agent users with returning sessions, use MTP with a 32k map and an FP8
+  draft, plus HiCache. On 2x RTX A4500 this holds 8 users at 32k each at 462 tok/s in
+  total. With 20 rotating sessions, 64 mamba slots keep 0.68 of the possible 0.74 prefix
+  hits, against 0.42 with 32 slots:
+  - **Memory fraction:** keep `--mem-fraction-static` at 0.87 or lower. At 0.90 a prefill
+    chunk next to 7 decoding users ran out of memory.
+  - **Mamba slots:** 3 per running user plus about 40 for idle sessions. Each returning
+    session needs a saved GDN state, and `--hicache-size` gives host state slots in
+    proportion to the GPU pools.
+  - **Storage tier:** to keep sessions on disk, add `--page-size 64`,
+    `--hicache-storage-backend file` and `--hicache-storage-prefetch-policy wait_complete`.
+    Page size 1 writes one file per token. The default `timeout` policy discards
+    restores from a cold disk. The file backend needs the OpenSSL headers (`libssl-dev`).
+
+  ```bash
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1 \
+  sglang serve --model-path <W4A16 INT4 checkpoint> --tp-size 2 \
+    --context-length 122880 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 \
+    --reasoning-parser qwen3 --tool-call-parser qwen3_coder \
+    --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy \
+    --mem-fraction-static 0.87 --max-running-requests 8 --max-mamba-cache-size 64 \
+    --disable-prefill-cuda-graph --cuda-graph-max-bs-decode 8 \
+    --enable-mixed-chunk --prefill-decode-interval 4 \
+    --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 4 --speculative-draft-model-quantization fp8 \
+    --speculative-token-map <32k token map> --enable-linear-replayssm-spec \
+    --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through
+  ```
+
+  `benchmark/capacity/studio.py plan` estimates users and flags for other GPUs.
 
   The block-FP8 checkpoint (`Qwen/Qwen3.8-27B-FP8`) also runs on SM8x, as Marlin
   W8A16. Its MTP head is already FP8, so drop `--speculative-draft-model-quantization`.

@@ -15,6 +15,9 @@
 All numbers below were measured on this machine with the scripts in `benchmark/ampere_qwen38/`.
 Results from the old `../inference/sglang-inf` folder came from an older sglang and were ignored.
 
+- **Benchmark studio:** `benchmark/capacity/studio.py` (`plan` / `run` / `report`) is the one
+  tool for measuring a setup on any machine. See section 7 and `benchmark/capacity/README.md`.
+
 ---
 
 ## 1. Headline results
@@ -418,3 +421,71 @@ A BF16 pool next to FP8 weights holds only about 57k tokens on 2x A4500, so FP8 
 **Docs:** `docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx`.
 
 **Benchmarks and results:** `benchmark/ampere_qwen38/*`, including the scripts, the token maps and `RESULTS.md`.
+
+---
+
+## 7. Eight agent users, HiCache, the storage tier and the benchmark studio (2026-11-08)
+
+Full tables: `benchmark/ampere_qwen38/RESULTS.md`, "Eight agent users with HiCache".
+Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
+
+### Findings
+- **8 users at 120k context, TP2.**
+  - The fork with an FP8 MTP draft and the 32k map decodes 107 / 308 / 462 tok/s total at
+    1 / 4 / 8 users of 32k. Vanilla (0.5.23.dev) gets 83 / 272 and cannot fit 8 users at 32k:
+    its 264k pool holds 7.
+  - GSM8K is 97.6-98.0% everywhere.
+- **Keep `--mem-fraction-static` at 0.87 or lower on the fork.**
+  - Section 3.6 (the shared draft embed and lm_head) hands vanilla's hidden headroom to the
+    KV pool. At 0.90, a prefill chunk next to 7 decoding users ran out of memory in
+    `_draft_extend_for_prefill`.
+  - An upstream PR for 3.6 must reserve that activation memory explicitly.
+- **GDN state slots decide multi-turn hit rates.** A returning session needs its saved state,
+  not just its KV.
+  - With 20 rotating sessions: 32 slots give 0.42 hits, 48 give 0.64, and 64 give 0.68,
+    against a 0.738 ceiling.
+  - `--hicache-size` splits host RAM between KV and state in proportion to the GPU pools.
+- **The HiCache `file` storage tier works for this hybrid model, GDN state included.**
+  - A 30k session comes back after a flush in 0.78 s, and after a server restart in 9 s on
+    this VM's 131 MB/s disk. Cold prefill is about 16 s.
+  - It needs `libssl-dev`, `--page-size 64` (page 1 writes a file per token) and
+    `--hicache-storage-prefetch-policy wait_complete` (the default drops slow restores).
+- **The decode gain is mostly the token map.** About three quarters of it is the map plus the
+  FP8 draft. The map is lossless, but it was built from English ShareGPT. Build one from your
+  own traffic (`build_token_map.py`) when the text differs, and compare acceptance.
+
+### Upstreaming status
+- **pre-commit:** clean after the formatting commit on top of `085978f852`.
+- **Rebase:** none of the 50 newer upstream commits touch the branch's files.
+- **To fix first:**
+  - `test_dflash_logits.py` (5 tests): the stubs lack `hot_candidate_head`.
+  - `test_fp8_lm_head_mxfp8.py`: the FP8 dense-prefill path reads `input_size_per_partition`,
+    which an FP8 `ParallelLMHead` lacks. That is a real bug.
+- **PRs in order of value.** One change each, with accuracy and speed results per the PR
+  template:
+  1. Draft embed/lm_head sharing (3.6), with explicit activation headroom.
+  2. The bf16-KV checkpoint-scale fix (3.11).
+  3. Token map under TP > 1 (3.2).
+  4. FP8 draft for compressed-tensors MTP (3.3).
+  5. Eager FP8 KV fallback on SM<89 (3.4).
+  6. `--language-model-only` for Qwen3.5 (3.8).
+  7. `tiny_gemm` on SM8x (3.1).
+  8. Dense prefill on SM8x (3.9, 3.10; follow `kernel-organization`).
+  9. DFlash hot vocab and GDN ReplaySSM (3.5, 3.7).
+
+### Benchmark studio
+- **`studio.py plan`:** users at a context and the serve flags, for this machine or
+  `--gpu NAME:MEM_GB:COUNT:SM`. Calibrated here to 1.5% on the KV pool.
+- **Estimates at 128k per user:**
+
+  | GPU | Users at once |
+  |---|---|
+  | A100 or H100 80 GB, TP1 | 10 |
+  | 2x H100, TP2 | 26 |
+  | L40S | 4 |
+
+  Verify each with `plan --write-suite` and `run`.
+- **`studio.py run`:** launch, cache check, sgl-eval GSM8K, burst, multi-turn (optionally with
+  `/v1/decisions` load and session ids or priorities) and storage-tier restore. Results go to
+  `benchmark/capacity/results/<run>/`.
+- **`studio.py report`:** compares runs from several machines.
