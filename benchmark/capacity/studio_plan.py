@@ -59,6 +59,10 @@ class Gpu(msgspec.Struct, frozen=True):
 
 
 class ServeChoice(msgspec.Struct, frozen=True):
+    # GDN slots one running request holds: 3 for extra_buffer_lazy with
+    # SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1, 4 without it, 5 for extra_buffer (from
+    # kv_cache_configurator._calculate_mamba_ratio).
+    slots_per_running: int = SLOTS_PER_RUNNING
     kv_dtype: str = "fp8_e4m3"
     state_dtype: str = "bfloat16"
     draft_quant: str = "fp8"
@@ -225,11 +229,11 @@ def plan_for(
     )
     kv_tok = kv_bytes_per_token(m, choice) / tp
     slot = state_bytes_per_slot(m, choice) / tp
-    per_user = context * kv_tok + SLOTS_PER_RUNNING * slot
+    per_user = context * kv_tok + choice.slots_per_running * slot
     idle = choice.idle_slots if m.linear_layers else 0
     users = max(0, int((pool - idle * slot) // per_user)) if pool > 0 else 0
     running = running_override or max(1, min(users, max_running_cap))
-    slots = (SLOTS_PER_RUNNING * running + idle) if m.linear_layers else 0
+    slots = (choice.slots_per_running * running + idle) if m.linear_layers else 0
     if slots_override is not None:
         slots = slots_override
     kv_tokens = int((pool - slots * slot) // kv_tok) if pool > 0 else 0

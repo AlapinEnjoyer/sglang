@@ -1016,6 +1016,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         chunk=args.chunk,
         language_model_only=args.language_model_only,
         idle_slots=args.idle_slots,
+        slots_per_running=args.slots_per_running,
         spec=not args.no_spec,
     )
     kv_tok = sp.kv_bytes_per_token(m, choice)
@@ -1036,7 +1037,16 @@ def cmd_plan(args: argparse.Namespace) -> None:
     plans = []
     tp = 1
     while tp <= gpu.count:
-        p = sp.plan_for(m, gpu, choice, tp, args.context, ram)
+        p = sp.plan_for(
+            m,
+            gpu,
+            choice,
+            tp,
+            args.context,
+            ram,
+            max_running_cap=args.max_running_cap,
+            running_override=args.max_running,
+        )
         plans.append(p)
         print(
             f"| {tp} | {p.mem_fraction:.2f} | {p.kv_tokens:,} | {p.users_at_context} | "
@@ -1126,7 +1136,26 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--no-token-map", action="store_true")
     plan.add_argument("--no-spec", action="store_true")
     plan.add_argument("--chunk", type=int, default=2048)
-    plan.add_argument("--idle-slots", type=int, default=sp.DEFAULT_IDLE_SLOTS)
+    plan.add_argument(
+        "--idle-slots",
+        type=int,
+        default=sp.DEFAULT_IDLE_SLOTS,
+        help="GDN slots for idle sessions on top of the running ones.",
+    )
+    plan.add_argument(
+        "--slots-per-running",
+        type=int,
+        default=sp.SLOTS_PER_RUNNING,
+        help="3 for extra_buffer_lazy + SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK=1, "
+        "4 without the env var, 5 for extra_buffer.",
+    )
+    plan.add_argument(
+        "--max-running",
+        type=int,
+        default=None,
+        help="Fix --max-running-requests instead of deriving it from the context.",
+    )
+    plan.add_argument("--max-running-cap", type=int, default=64)
     plan.add_argument("--language-model-only", action="store_true")
     plan.add_argument("--write-suite", type=Path, default=None)
     return p.parse_args()
