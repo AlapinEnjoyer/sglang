@@ -453,6 +453,11 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
   - `--mamba-max-states-per-path 2` added about +0.02-0.05 hits.
   - int8 snapshots are incompatible with HiCache.
   - Restored states match a recompute: same top-1, |dlogp| <= 0.05.
+- **Hit rate vs session count** (RESULTS "Hit rate against the number of sessions", 64 slots, path cap 2).
+  - GPU only: 0.73 / 0.71 / 0.61 / 0.47 / 0.42 / 0.33 at 10 / 15 / 20 / 25 / 30 / 40 sessions.
+  - HiCache 12 GB/GPU: 0.73 / 0.73 / 0.72 / 0.67 / 0.63 / 0.53.
+  - Gradual, not a cliff. KV capacity sets the knee here, not slots. Under write_through
+    RAM also copies GPU-resident KV, so capacity is about the RAM pool, not GPU + RAM.
   - Chat clients must send `reasoning_content` back, or every turn recomputes the previous
     answer.
 - **The HiCache `file` storage tier works for this hybrid model, GDN state included.**

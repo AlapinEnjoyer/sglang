@@ -418,6 +418,40 @@ VM's 131 MB/s disk the restore time depends on what the OS still caches.
   history.
 - **`bench_multiturn` measures the best case.** It sends token ids, so it never hits this.
 
+### Hit rate against the number of sessions (`results/2xa4500-session-sweep`)
+
+Same workload (8 running, 6 turns of 4000 new + 500 output tokens, 0.5 req/s offered,
+ceiling 0.738), 64 GDN slots, path cap 2. Single runs; noise about +/-0.05.
+
+| Sessions | GPU only: hit rate | TTFT avg / p99 (s) | HiCache 12 GB/GPU: hit rate | TTFT avg / p99 (s) |
+|---|---|---|---|---|
+| 10 | 0.730 | 3.6 / 7.6 | 0.730 | 3.9 / 9.6 |
+| 15 | 0.713 | 3.6 / 12.5 | 0.730 | 3.4 / 7.4 |
+| 20 | 0.606 | 7.4 / 35.0 | 0.716 | 5.2 / 13.1 |
+| 25 | 0.467 | 12.2 / 43.3 | 0.674 | 6.0 / 18.2 |
+| 30 | 0.419 | 14.3 / 57.6 | 0.626 | 7.0 / 27.5 |
+| 40 | 0.334 | 18.0 / 62.0 | 0.529 | 10.1 / 39.6 |
+
+- **The decline is gradual, not a cliff.** The hit rate averages all 6 turns, and sessions
+  sit at different turns (4.5k to 27k tokens). So the misses spread over a range of session
+  counts instead of starting at one.
+- **KV capacity sets where it starts, not GDN slots.** 177 slots (64 GPU + 113 host) hold
+  2 snapshots each for 88 sessions.
+  - **GPU only.** Of the 286,604-token pool, 8 running requests take about 120k, which
+    leaves about 165k for idle sessions. That runs out between 15 and 20 sessions.
+  - **HiCache.** Host eviction only takes nodes already evicted from the GPU
+    (`_is_host_leaf` in `unified_tree_core.py`). Under `write_through` the RAM pool
+    therefore also copies what is on the GPU, and capacity is about the 436,704-token RAM
+    pool, not GPU + RAM. That runs out at about 25 sessions.
+  - **Estimate.** These capacity numbers are arithmetic; per-turn hits were not recorded.
+- **Both runs are overloaded.** 0.5 req/s is offered and at most 0.33 is served, so the
+  TTFT figures include queueing. At 40 sessions HiCache still finishes 31% more requests
+  (0.21 against 0.16 req/s).
+- **To move the knee, add host RAM** (`--hicache-size`) or a storage tier. More GPU slots
+  only help once slots are the limit, as they were at 32 slots.
+- **Code version.** `machine.json` records `906ab743e9`. The only later commit,
+  `ced60fecf1`, touches the planner, not the server.
+
 ### Session restore from the storage tier (HiCache `file` backend)
 
 Setup: one 30k-token session, then the next turn's first-token time. "After flush" empties the
@@ -435,8 +469,9 @@ process with the same storage directory.
     Without it every storage query fails ("HiCache storage query failed"), and the only sign
     is in the server log.
   - `/flush_cache` refuses while storage writes are pending, so retry it.
-- **The restart number is this VM's disk.** It reads 131 MB/s with O_DIRECT, against
-  about 1.1 GB per GPU for this session. NVMe at 3-7 GB/s should restore it in well under
+- **The restart number is this VM's disk.** It reads 131 MB/s with O_DIRECT. This session
+  is about 0.52 GB of KV plus 39 MB of GDN state per GPU, and both ranks read from the same
+  disk. NVMe at 3-7 GB/s should restore it in well under
   a second. The after-flush number is served from the OS page cache.
 
 ### Earlier vanilla tests on 2x A4500 (pip 0.5.21, 2026-10-17)
