@@ -1544,10 +1544,20 @@ class TestDeclaredParts(CustomTestCase):
                     speculative_algorithm=algorithm, speculative_num_draft_tokens=4
                 ),
             ):
-                with self.assertRaisesRegex(ValueError, "requires a KDA"):
-                    cfg._kv_layer_decls()
-                with self.assertRaisesRegex(ValueError, "requires a KDA"):
-                    cfg._build_hybrid_req_pool(max_num_reqs=3, extra_max_context_len=4)
+                if algorithm == "DFLASH":
+                    # DFLASH also commits GDN rings through the generic replay path.
+                    cfg._validate_replay_spec_algorithm()
+                    cfg.hybrid_gdn_config = None
+                    with self.assertRaisesRegex(ValueError, "requires a KDA"):
+                        cfg._validate_replay_spec_algorithm()
+                    cfg.hybrid_gdn_config = hf
+                else:
+                    with self.assertRaisesRegex(ValueError, "requires a KDA"):
+                        cfg._kv_layer_decls()
+                    with self.assertRaisesRegex(ValueError, "requires a KDA"):
+                        cfg._build_hybrid_req_pool(
+                            max_num_reqs=3, extra_max_context_len=4
+                        )
                 cfg.hybrid_kda_config = object()
                 cfg._validate_replay_spec_algorithm()
                 cfg.hybrid_kda_config = None

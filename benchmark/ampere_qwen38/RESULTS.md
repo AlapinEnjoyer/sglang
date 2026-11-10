@@ -511,3 +511,36 @@ process with the same storage directory.
       That is a real bug.
   - The branch fixes 3 tests that fail on `main` on SM86 (`test_prefix_valid_fp8_pool.py`).
   - The other 36 failures are shared with `main`; they are Blackwell- or Hopper-only paths.
+
+## After the upstream sync, 2026-11-10 (branch rebased onto `0c44fbff44`)
+
+180 upstream commits, no conflicts. 11 branch files were also changed upstream (unquant BF16
+dispatch, KV-cache configurator, draft workers, DFlash, Qwen3.5); the combined diffs keep the
+branch's routes in place. Dependencies moved to `sgl-deep-gemm` 0.2.7 and `sgl-flash-mla` 1.0.4.
+
+**`fork-best-ram` rerun** (`results/2xa4500-20261110-rebase`, same suite and config as
+`results/2xa4500-20261108`; burst at 32k, temperature 1.0, 2 repeats each):
+
+| Measurement | 2026-11-08 | 2026-11-10 |
+|---|---|---|
+| KV pool / GDN slots GPU, host / host KV | 286,604 / 64, 113 / 436,704 | same |
+| 1 user, decode tok/s (accept) per repeat | 117.3 (2.84), 94.3 (2.32) | 126.2 (3.07), 91.1 (2.24) |
+| 4 users, total tok/s (accept) per repeat | 289.9 (2.65), 339.5 (2.96) | 297.8 (2.60), 374.3 (3.19) |
+| 8 users, total tok/s (accept) per repeat | 457.6 (2.92), 483.2 (4.04) | 432.2 (2.88), 446.5 (2.84) |
+| Prefill tok/s, 1 / 8 users | 1932 / 1879 | 1956 / 1878 |
+| Multi-turn hits, 10 / 20 sessions | 0.730 / 0.691 | 0.730 / 0.670 |
+| Multi-turn median TPOT, 10 / 20 sessions | 34 / 38 ms | 33 / 37 ms |
+
+- **No regression outside noise.** Accept length moves from 2.2 to 4.0 between repeats of the
+  same config at temperature 1.0, and the throughput follows it. The 8-user pair with equal
+  acceptance (2.88 against 2.92) is 6% apart, inside the run-to-run spread above.
+- **Tests:** 18 test files covering the branch's code, run on SM86 for the branch and for
+  vanilla `main` (same venv, `PYTHONPATH` at the upstream worktree):
+  - The branch still breaks the same 6 tests (`test_dflash_logits.py` 5,
+    `test_fp8_lm_head_mxfp8.py::test_marlin_uses_the_converted_block_size`).
+  - `test_declared_parts.py::test_replay_algorithm_guard_covers_unified_and_static_construction`
+    asserted that DFLASH replay rejects GDN models, which the branch's DFlash GDN commit
+    allows. The test now checks both: DSPARK on GDN raises, DFLASH on GDN passes, and DFLASH
+    on a model with neither KDA nor GDN raises. It was not in the 2026-11-08 set.
+  - The branch passes 1 test and 18 subtests that fail on `main` on SM86
+    (`test_prefix_valid_fp8_pool.py`); everything else fails on both (Hopper/Blackwell paths).

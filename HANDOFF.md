@@ -1,6 +1,6 @@
 # Handoff: SGLang on Ampere for Qwen3.8-27B (Swift-1.5 INT4 and Qwen FP8)
 
-- **Branch:** `ampere-opt`, rebased on 2026-11-10 onto upstream `main` at `0c44fbff44` (earlier syncs: `ba5906471c` on 2026-11-07; originally forked at `14e3414513`). It has 34 commits and has not been pushed. The pre-sync branch is kept as `ampere-opt-pre-sync-20261107`. Commit hashes cited in this file and RESULTS.md point at the current branch.
+- **Branch:** `ampere-opt`, rebased on 2026-11-10 onto upstream `main` at `0c44fbff44` (earlier syncs: `ba5906471c` on 2026-11-07; originally forked at `14e3414513`). It has 35 commits and has not been pushed. The pre-sync branch is kept as `ampere-opt-pre-sync-20261107`. Commit hashes cited in this file and RESULTS.md point at the current branch.
   - Remote `upstream` is `sgl-project/sglang`. To sync again: `git fetch upstream`, fast-forward `main` in the `../sglang-upstream` worktree, `git rebase main`, then reinstall (`uv pip install --prerelease=allow -e "python[dev]"`) and copy the rebuilt `*.so` files into the upstream worktree.
 - **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9. RULER2 also needs `inflect nltk wonderwords`, which are installed.
   - The login shell exports `VIRTUAL_ENV` pointing to the old sglang-inf env. Always `export VIRTUAL_ENV=$PWD/.venv` and use `uv run --active`; `serve.sh` and `bench.sh` already do.
@@ -471,7 +471,10 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
 
 ### Upstreaming status
 - **pre-commit:** clean after the formatting commit on top of `3272e4b246`.
-- **Rebase:** none of the 50 newer upstream commits touch the branch's files.
+- **Rebase (2026-11-10):** onto `0c44fbff44`, 180 commits, no conflicts. A rerun of
+  `fork-best-ram` matches the 2026-11-08 numbers within noise (RESULTS "After the upstream
+  sync, 2026-11-10"). The DFlash GDN PR must include the updated replay-guard test in
+  `test_declared_parts.py`.
 - **To fix first:**
   - `test_dflash_logits.py` (5 tests): the stubs lack `hot_candidate_head`.
   - `test_fp8_lm_head_mxfp8.py`: the FP8 dense-prefill path reads `input_size_per_partition`,
