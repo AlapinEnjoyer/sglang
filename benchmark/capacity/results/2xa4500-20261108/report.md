@@ -4,7 +4,7 @@
 
 | Run | GPUs | RAM | Storage read | Repo | Date |
 |---|---|---|---|---|---|
-| 2xa4500-20261108 | 2x NVIDIA RTX A4500 NVLink | 53 GB | 125 MB/s | ampere-opt@160651da85 | 2026-11-08T19:56:44 |
+| 2xa4500-20261108 | 2x NVIDIA RTX A4500 NVLink | 53 GB | 125 MB/s | ampere-opt@f3e888b236 | 2026-11-08T19:56:44 |
 
 ## Configs
 

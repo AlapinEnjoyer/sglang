@@ -1,6 +1,6 @@
 # Handoff: SGLang on Ampere for Qwen3.8-27B (Swift-1.5 INT4 and Qwen FP8)
 
-- **Branch:** `ampere-opt`, rebased on 2026-11-07 onto upstream `main` at `ba5906471c` (originally forked at `14e3414513`). It has 25 commits and has not been pushed. The pre-sync branch is kept as `ampere-opt-pre-sync-20261107`.
+- **Branch:** `ampere-opt`, rebased on 2026-11-10 onto upstream `main` at `0c44fbff44` (earlier syncs: `ba5906471c` on 2026-11-07; originally forked at `14e3414513`). It has 34 commits and has not been pushed. The pre-sync branch is kept as `ampere-opt-pre-sync-20261107`. Commit hashes cited in this file and RESULTS.md point at the current branch.
   - Remote `upstream` is `sgl-project/sglang`. To sync again: `git fetch upstream`, fast-forward `main` in the `../sglang-upstream` worktree, `git rebase main`, then reinstall (`uv pip install --prerelease=allow -e "python[dev]"`) and copy the rebuilt `*.so` files into the upstream worktree.
 - **Environment:** `/home/ubuntu/experiments/sglang/.venv`, built with uv: `uv pip install --prerelease=allow -e "python[dev]"`. It contains torch 2.14.1+cu130, flashinfer 0.7.0.post1 and sglang-kernel 0.4.9. RULER2 also needs `inflect nltk wonderwords`, which are installed.
   - The login shell exports `VIRTUAL_ENV` pointing to the old sglang-inf env. Always `export VIRTUAL_ENV=$PWD/.venv` and use `uv run --active`; `serve.sh` and `bench.sh` already do.
@@ -125,14 +125,14 @@ For the FP8 checkpoint, use the same command with `--model-path Qwen/Qwen3.8-27B
 
 Each item below is one commit on `ampere-opt`. The commit message has the before and after numbers.
 
-### 3.1 Skinny BF16 linears go to `tiny_gemm` on SM8x (`c551c2e65e`)
+### 3.1 Skinny BF16 linears go to `tiny_gemm` on SM8x (`f3aca299d2`)
 
 - **File:** `python/sglang/srt/layers/quantization/unquant.py`. Adds `_use_sm8x_tiny_gemm` and `_sm8x_tiny_gemm`.
 - **Problem:** the GDN `in_proj_ba` projection (BF16, N=48 per rank, K=5120) ran through cuBLAS at 28-61 us per call during decode and verify. cuBLAS picks a single-CTA kernel for that shape. Across 48 layers this was about 2 ms of a 29 ms MTP cycle.
 - **Fix:** on SM8x, use the existing JIT `tiny_gemm_bf16` when N <= 256, M <= 8, bf16 and contiguous. It takes 3.6 us.
 - **Result:** S1 95.3 -> 102.9 tok/s, ShareGPT chat 82.8 -> 87.5.
 
-### 3.2 `--speculative-token-map` works under TP > 1 (`e712a95930`, `7ee66f5af9`)
+### 3.2 `--speculative-token-map` works under TP > 1 (`65efcc342e`, `1de6d2f1b7`)
 
 - **Files:**
   - `python/sglang/srt/speculative/spec_utils.py`: new `shard_hot_token_head`.
@@ -162,21 +162,21 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 
   32k is the recommended size for MTP.
 
-### 3.3 FP8 draft for the in-checkpoint MTP (`3beac253c1`)
+### 3.3 FP8 draft for the in-checkpoint MTP (`804ad2e4af`)
 
 - **File:** `python/sglang/srt/models/qwen3_5_mtp.py`: `_mtp_quant_config`.
 - **Problem:** compressed-tensors checkpoints keep `mtp.*` in BF16 through their ignore list. `--speculative-draft-model-quantization fp8` was overridden on CUDA by the checkpoint's detected method, so the flag did nothing.
 - **Fix:** when that case is detected, return an online `Fp8Config`. On SM8x the draft then runs as Marlin W8A16.
 - **Result:** S1 120.5 -> 125.9, ShareGPT chat 102.8 -> 107.4, code chat 129.8 -> 134.5 tok/s. Acceptance is unchanged.
 
-### 3.4 Eager FP8 KV fallback on SM < 89 (`740498f917`)
+### 3.4 Eager FP8 KV fallback on SM < 89 (`b4fd48f390`)
 
 - **File:** `python/sglang/srt/mem_cache/memory_pool.py`: `set_kv_buffer_prefix_valid` and the new `_triton_has_fp8e4nv`.
 - **Problem:** the fused quantize-and-write Triton kernel uses `fp8e4nv`, which Triton only lowers on SM89 and newer. Any draft whose attention layers carry KV scales crashed on Ampere. DFlash2 with an FP8 draft is one such case.
 - **Fix:** SM8x quantizes eagerly, using the same layer scales the fused kernel would use.
 - **Result:** the DFlash2 FP8 draft now runs (+1-4%) and its weights drop from 2.18 GB to 1.65 GB per GPU.
 
-### 3.5 DFlash2 selector uses the hot vocabulary (`90b2aed2b6`)
+### 3.5 DFlash2 selector uses the hot vocabulary (`a20be59a57`)
 
 - **Files:**
   - `python/sglang/srt/models/dflash.py`: `hot_candidate_topk` and `DFlash2DraftModel.set_hot_candidate_head`.
@@ -185,13 +185,13 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 - **Fix:** with `--speculative-token-map`, candidate top-k runs over an evenly re-sharded hot head built with the same helper as 3.2.
 - **Result with the 64k map:** S1 153.9 -> 160.9, ShareGPT chat 123.4 -> 129.7, code chat 152.8 -> 166.2 tok/s. Acceptance is preserved. A 32k map costs too much acceptance over 7 drafted positions.
 
-### 3.6 Draft embed/lm_head shared before memory sizing (`1acc7459ea`)
+### 3.6 Draft embed/lm_head shared before memory sizing (`4e17a733e1`)
 
 - **File:** `python/sglang/srt/speculative/eagle_worker_v2.py`. `init_token_map` and `init_lm_head` move from `alloc_memory_pool` to `__init__`.
 - **Problem:** the MTP draft loads its own copies of the 248k embedding and lm_head. They used to be freed only after the scheduler had measured free memory, so about 1.9 GB per GPU was never given to the KV pool.
 - **Result:** at the same `--mem-fraction-static 0.90`, the KV pool grows from 277,031 to 422,311 tokens (+52%). Speed is unchanged.
 
-### 3.7 GDN ReplaySSM for DFLASH (`ab15f0d1b3`)
+### 3.7 GDN ReplaySSM for DFLASH (`a4a55ad75b`)
 
 - **Files:**
   - `python/sglang/srt/mem_cache/kv_cache_configurator.py`: the configurator guard.
@@ -208,7 +208,7 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 
   GSM8K is 0.964. With MTP, ReplaySSM also works out of the box: at 4 users the KV pool goes from 333k to 423k tokens and throughput from 330 to 367 tok/s.
 
-### 3.8 `--language-model-only` for Qwen3.5 (`5e57753d8d`)
+### 3.8 `--language-model-only` for Qwen3.5 (`3bbe85cb24`)
 
 - **Files:**
   - `python/sglang/srt/server_args.py`: `LANGUAGE_MODEL_ONLY_ARCHITECTURES`.
@@ -216,7 +216,7 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 - **Result:** weights 9.07 -> 8.62 GB per GPU, and the KV pool grows from 422k to 461k tokens. GSM8K is 0.960.
 - **Caveat:** output is not bit-identical to the multimodal (mrope) path; 129 of 250 greedy answers match. Text-only therefore stays opt-in.
 
-### 3.9 Dequant + cuBLAS for large-M W4A16 GEMMs (`b632da97ad`)
+### 3.9 Dequant + cuBLAS for large-M W4A16 GEMMs (`a3cc28a741`)
 
 - **Files:**
   - New `python/sglang/kernels/ops/quantization/marlin_dequant.py`: a Triton kernel that inverts the Marlin weight and scale permutations, bit-exact, at about 400 GB/s.
@@ -228,7 +228,7 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 - **Result:** 8k TTFT 3.80 -> 3.48 s and 32k TTFT 17.67 -> 16.24 s (about 8%). The scratch adds 0.21 GB per GPU.
 - **Numerics:** tail prompt logprobs differ from Marlin by 0.13 nats on average. The model's own noise floor, Marlin with prefill chunk 2048 against 4096, is 0.19.
 
-### 3.10 Dequant + cuBLAS for large-M FP8 Marlin GEMMs (`be93d84363`)
+### 3.10 Dequant + cuBLAS for large-M FP8 Marlin GEMMs (`287e6a8adc`)
 
 - **Files:**
   - `python/sglang/kernels/ops/quantization/marlin_dequant.py`: new `marlin_fp8_dequant`. It inverts the 8-bit Marlin layout and decodes e4m3 with integer ops, because Triton has no fp8e4nv casts below SM89. Marlin folds a 2^120 exponent bias into its scales; the kernel undoes it.
@@ -240,7 +240,7 @@ Each item below is one commit on `ampere-opt`. The commit message has the before
 - **Result:** with the same `SGLANG_MARLIN_DEQUANT_GEMM_MIN_M` (2048 on SM8x), 8k TTFT 4.67 -> 3.58 s and 32k TTFT 21.0 -> 16.6 s. The scratch costs 0.18 GB per GPU at TP2.
 - **Numerics:** prompt logprobs move by 0.137 nats on average against Marlin. The chunk-size noise floor is 0.116.
 
-### 3.11 Checkpoint KV scales ignored for a 16-bit KV cache (`c34b472525`)
+### 3.11 Checkpoint KV scales ignored for a 16-bit KV cache (`dd8c15b755`)
 
 - **Files:** `python/sglang/srt/mem_cache/kv_cache_dtype.py` (`_reset_kv_scales_for_unquantized_cache`), plus a regression test in `test/registered/unit/layers/quantization/test_compressed_tensors_kv_cache.py`.
 - **Bug (also in upstream `main`):** the Swift INT4 checkpoint ships fp8 calibration scales (k about 0.03), and sglang loads them whatever `--kv-cache-dtype` is.
@@ -470,7 +470,7 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
   own traffic (`build_token_map.py`) when the text differs, and compare acceptance.
 
 ### Upstreaming status
-- **pre-commit:** clean after the formatting commit on top of `085978f852`.
+- **pre-commit:** clean after the formatting commit on top of `3272e4b246`.
 - **Rebase:** none of the 50 newer upstream commits touch the branch's files.
 - **To fix first:**
   - `test_dflash_logits.py` (5 tests): the stubs lack `hot_candidate_head`.

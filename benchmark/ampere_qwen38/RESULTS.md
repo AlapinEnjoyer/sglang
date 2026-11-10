@@ -186,7 +186,7 @@ Preset `fp8x1` (`LM_ONLY=1`, TP2, MTP 3/1/4, 32k map, ReplaySSM, 8 mamba slots, 
   bit-identical to fp8 x bf16 scale. Prompt logprobs move by a mean of 0.137 nats against the Marlin
   path, inside the chunk-size noise floor (Marlin 4096 vs 2048-token chunks: 0.116).
 
-## BF16 KV with checkpoint KV scales (bug, fixed in `c34b472525`)
+## BF16 KV with checkpoint KV scales (bug, fixed in `dd8c15b755`)
 
 With `--kv-cache-dtype bf16`, `best1` on the INT4 checkpoint answered 64k/128k-token prompts with
 fluent text unrelated to the prompt, ending in random tokens. The same config with fp8 KV quoted
@@ -277,7 +277,7 @@ command (preset `A`), so it is today's baseline, not the October one. Accept len
   asserts the fused fp8 Triton kernel ran, which is impossible below SM89. Upstream fails all 21 tests in
   `test_prefix_valid_fp8_pool.py` on SM86 (`fp8e4nv not supported`); the branch fails only those 2.
 
-## Eight agent users with HiCache, 2026-11-08 (branch `ampere-opt` at `085978f852`)
+## Eight agent users with HiCache, 2026-11-08 (branch `ampere-opt` at `3272e4b246`)
 
 Setup:
 - **Command:** the user's 8-user command on Swift-1.5 INT4 at TP2. That is 120k context,
@@ -449,8 +449,8 @@ ceiling 0.738), 64 GDN slots, path cap 2. Single runs; noise about +/-0.05.
   (0.21 against 0.16 req/s).
 - **To move the knee, add host RAM** (`--hicache-size`) or a storage tier. More GPU slots
   only help once slots are the limit, as they were at 32 slots.
-- **Code version.** `machine.json` records `906ab743e9`. The only later commit,
-  `ced60fecf1`, touches the planner, not the server.
+- **Code version.** `machine.json` records `521a0dc35e`. The only later commit,
+  `180d8d2448`, touches the planner, not the server.
 
 ### Session restore from the storage tier (HiCache `file` backend)
 
@@ -500,7 +500,7 @@ process with the same storage directory.
 ### PR readiness check (2026-11-08)
 
 - **pre-commit:** 8 branch files failed (isort, ruff format, whitespace); fixed in the commit
-  that follows `085978f852`.
+  that follows `3272e4b246`.
 - **Tests:** compared against `main` on SM86 with the same venv, over the same 12 failing
   files.
   - The branch breaks 6 tests, which need fixing before the related PRs:

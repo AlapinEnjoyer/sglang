@@ -9,7 +9,7 @@
  "cpu": "Intel Xeon Processor (SapphireRapids)",
  "ram_gb": 52.62454784,
  "ram_available_gb": 49.646821376,
- "repo": "ampere-opt@906ab743e9",
+ "repo": "ampere-opt@521a0dc35e",
  "storage_dir": null,
  "storage_read_mb_s": null
 }

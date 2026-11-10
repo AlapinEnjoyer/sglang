@@ -4,7 +4,7 @@
 
 | Run | GPUs | RAM | Storage read | Repo | Date |
 |---|---|---|---|---|---|
-| 2xa4500-session-sweep | 2x NVIDIA RTX A4500 NVLink | 53 GB | - MB/s | ampere-opt@906ab743e9 | 2026-11-08T23:02:52 |
+| 2xa4500-session-sweep | 2x NVIDIA RTX A4500 NVLink | 53 GB | - MB/s | ampere-opt@521a0dc35e | 2026-11-08T23:02:52 |
 
 ## Configs
 
