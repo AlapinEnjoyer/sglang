@@ -1,0 +1,100 @@
+{
+ "name": "presync-2",
+ "server_cmd": "/home/ubuntu/experiments/sglang-presync/.venv/bin/sglang serve --model-path /home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4 --served-model-name local --tp 2 --host 127.0.0.1 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8 --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through --mem-fraction-static 0.87 --max-mamba-cache-size 64 --speculative-draft-model-quantization fp8 --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt --port 30000",
+ "env": {
+  "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+  "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1",
+  "PATH": "/home/ubuntu/experiments/sglang-presync/.venv/bin:/home/ubuntu/experiments/sglang/.venv/bin:/usr/local/cuda/bin:/home/ubuntu/.local/share/mise/installs/claude-code/2.1.295:/home/ubuntu/.local/share/mise/installs/bat/0.26.1/bat-v0.26.1-x86_64-unknown-linux-musl:/home/ubuntu/.local/share/mise/installs/zoxide/0.9.9:/home/ubuntu/.local/share/mise/installs/rg/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl:/home/ubuntu/.local/share/mise/installs/fzf/0.70.0:/home/ubuntu/.local/share/mise/installs/eza/0.23.4:/home/ubuntu/.local/share/mise/installs/uv/0.11.0/uv-x86_64-unknown-linux-musl:/home/ubuntu/.local/share/mise/installs/glow/2.1.1/glow_2.1.1_Linux_x86_64:/home/ubuntu/.local/share/mise/installs/neovim/0.11.6/bin:/home/ubuntu/.local/share/mise/installs/gdu/5.38.0:/home/ubuntu/.cargo/bin:/home/ubuntu/.local/bin:/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/usr/local/cuda/bin:/home/ubuntu/.local/share/zinit/polaris/bin:/home/ubuntu/experiments/inference/llama.cpp/build/bin:/home/ubuntu/experiments/inference/llama.cpp/build/bin"
+ },
+ "steps": {
+  "burst": {
+   "cells": {
+    "32768x8": {
+     "context_len": 32768,
+     "users": 8,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.41494118189439,
+     "ttft_last": 159.6091516832821,
+     "prefill_tps_first_user": 1881.6026800060376,
+     "prefill_tps_all": 1642.4120874984744,
+     "decode_tps_per_user": 59.86293350344889,
+     "decode_tps_total": 478.90346802759115,
+     "decode_tps_slowest_user": 46.120198932649416,
+     "decode_tps_while_others_prefill": 9.764381396594636,
+     "accept_length": 3.0003030303030305
+    }
+   },
+   "skipped": [],
+   "error": null
+  },
+  "multiturn": {
+   "ceiling": 0.7377049180327869,
+   "settings": {
+    "clients": [
+     20
+    ],
+    "rounds": 6,
+    "request_length": 4000,
+    "output_length": 500,
+    "request_rate": 0.5,
+    "max_parallel": 8,
+    "decision_rate": 0.0,
+    "session_ids": false,
+    "priority": null
+   },
+   "runs": {
+    "20": {
+     "total_requests": 120,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 5.551546642968121,
+     "p90_ttft": 10.038659915328026,
+     "p99_ttft": 15.347874978091568,
+     "median_ttft": 4.5112361731007695,
+     "max_ttft": 16.99051113333553,
+     "average_tpot": 0.035668825771111835,
+     "p90_tpot": 0.05488005383322781,
+     "p99_tpot": 0.07439433080107834,
+     "median_tpot": 0.03620598012934213,
+     "max_tpot": 0.08116063183987278,
+     "average_itl": 0.10987989905262804,
+     "p90_itl": 0.045678733848035336,
+     "p99_itl": 1.1547637423500419,
+     "median_itl": 0.0363695421256125,
+     "max_itl": 1.2417516061104834,
+     "average_latency": 23.350290702752925,
+     "p90_latency": 35.11886151880026,
+     "p99_latency": 46.429139834828675,
+     "median_latency": 23.707492085173726,
+     "max_latency": 53.82606060896069,
+     "input_token_throughput": 4322.415068755985,
+     "output_token_throughput": 141.71852684445852,
+     "throughput": 0.2834370536889171,
+     "cache_hit_rate": 0.6809879781420765,
+     "decisions": null
+    }
+   }
+  }
+ },
+ "startup_s": 176.09642577171326,
+ "pools": {
+  "version": "0.5.24.dev943+g4ddcbb8ed",
+  "kv_pool_tokens": 286604,
+  "max_running": 8,
+  "page_size": 1,
+  "context_len": 122880,
+  "model_path": "/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4",
+  "mamba_slots": 64,
+  "host_kv_tokens": 436704,
+  "host_state_slots": 113,
+  "weights_gb": 9.1,
+  "free_after_init_gb": 1.36
+ },
+ "status": "ok"
+}

@@ -1,0 +1,44 @@
+# Deterministic cache-logic A/B: 20 sessions replayed round-robin, one request at a time,
+# greedy with fixed output length, so arrival timing drops out and a gap between builds
+# comes from the cache logic. $PRESYNC as in studio-ab-sync-2xa4500.toml.
+# Same flags as fork-best-ram in studio-swift15-2xa4500.toml.
+#
+#   MODEL=/models/Swift-1.5-Qwen3.8-27b-INT4 PRESYNC=/path/to/presync-worktree \
+#   python benchmark/capacity/studio.py run benchmark/capacity/configs/studio-ab-replay-2xa4500.toml
+
+launch = "sglang serve"
+port = 30000
+server_args = """
+  --model-path $MODEL --served-model-name local --tp 2 --host 127.0.0.1
+  --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16
+  --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+  --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy
+  --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec
+  --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through
+  --mem-fraction-static 0.87 --max-mamba-cache-size 64
+  --speculative-draft-model-quantization fp8
+  --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt
+"""
+
+[env]
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK = "1"
+
+[steps.multiturn]
+clients = [20]
+max_parallel = 1
+request_rate = 100.0
+ready_queue_policy = "fifo"
+
+[[configs]]
+name = "presync"
+launch = "$PRESYNC/.venv/bin/sglang serve"
+env = { PATH = "$PRESYNC/.venv/bin:$PATH" }
+steps = ["multiturn"]
+
+[[configs]]
+name = "synced"
+steps = ["multiturn"]

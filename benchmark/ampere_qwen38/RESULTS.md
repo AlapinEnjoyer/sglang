@@ -544,3 +544,23 @@ branch's routes in place. Dependencies moved to `sgl-deep-gemm` 0.2.7 and `sgl-f
     on a model with neither KDA nor GDN raises. It was not in the 2026-11-08 set.
   - The branch passes 1 test and 18 subtests that fail on `main` on SM86
     (`test_prefix_valid_fp8_pool.py`); everything else fails on both (Hopper/Blackwell paths).
+
+**Pre-sync against synced, alternated** (`results/2xa4500-ab-sync-20261110`). The pre-sync
+build (`4ddcbb8ede`, its own worktree and venv) and the synced build ran alternately on the
+same box with `fork-best-ram`'s flags: 8 users at 32k (3 repeats), then 20 sessions.
+
+| Build | 8-user total tok/s (accept) | 20-session hits |
+|---|---|---|
+| pre-sync, run 1 | 443.0 (2.77), 466.1 (3.04), 474.9 (2.90) | 0.679 |
+| synced, run 1 | 455.9 (3.74), 465.6 (2.94), 440.5 (2.77) | 0.657 |
+| pre-sync, run 2 | 451.5 (2.82), 478.9 (3.06), 481.4 (3.00) | 0.681 |
+| synced, run 2 | 436.8 (2.75), 484.4 (3.07), 486.7 (2.97) | 0.679 |
+
+- **Decode is unchanged.** Both builds span about 437-487 tok/s.
+- **Hits are about the same.** Synced runs give 0.657-0.679 (0.670 in the first rerun) and
+  pre-sync runs 0.679-0.691. The means are 0.669 and 0.684. The 0.015 gap is smaller than
+  the spread between two synced runs (0.022), so these runs cannot separate a 1-point change
+  from noise.
+- **Next check if it matters:** `configs/studio-ab-replay-2xa4500.toml` replays the 20
+  sessions one request at a time in a fixed order (`ready_queue_policy = "fifo"`), which
+  takes arrival timing out. Not run yet.

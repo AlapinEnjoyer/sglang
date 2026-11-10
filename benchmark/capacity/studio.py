@@ -68,6 +68,9 @@ class MultiturnStep(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     output_length: int = 500
     request_rate: float = 0.5
     max_parallel: int = 8
+    # "fifo" with max_parallel = 1 replays sessions round-robin, one request at a time:
+    # the hit rate then depends on the cache logic only, not on arrival timing.
+    ready_queue_policy: str = "random"
     decision_rate: float = 0.0
     session_ids: bool = False
     priority: Optional[int] = None
@@ -459,6 +462,8 @@ def step_multiturn(server: Server, step: MultiturnStep, out: Path) -> Dict[str, 
             str(step.output_length),
             "--request-rate",
             str(step.request_rate),
+            "--ready-queue-policy",
+            step.ready_queue_policy,
             "--disable-auto-run",
             "--log-file",
             str(log_file),

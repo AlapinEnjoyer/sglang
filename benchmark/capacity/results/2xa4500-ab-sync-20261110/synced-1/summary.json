@@ -1,0 +1,99 @@
+{
+ "name": "synced-1",
+ "server_cmd": "/home/ubuntu/experiments/sglang/.venv/bin/sglang serve --model-path /home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4 --served-model-name local --tp 2 --host 127.0.0.1 --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8 --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4 --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through --mem-fraction-static 0.87 --max-mamba-cache-size 64 --speculative-draft-model-quantization fp8 --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt --port 30000",
+ "env": {
+  "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+  "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1"
+ },
+ "steps": {
+  "burst": {
+   "cells": {
+    "32768x8": {
+     "context_len": 32768,
+     "users": 8,
+     "max_new_tokens": 2560,
+     "all_concurrent": true,
+     "ttft_first": 17.411946427077055,
+     "ttft_last": 159.75175948720425,
+     "prefill_tps_first_user": 1881.9263048640546,
+     "prefill_tps_all": 1640.9459328740422,
+     "decode_tps_per_user": 56.985146081691504,
+     "decode_tps_total": 455.88116865353203,
+     "decode_tps_slowest_user": 47.308124023253995,
+     "decode_tps_while_others_prefill": 9.373653295609602,
+     "accept_length": 2.938181818181818
+    }
+   },
+   "skipped": [],
+   "error": null
+  },
+  "multiturn": {
+   "ceiling": 0.7377049180327869,
+   "settings": {
+    "clients": [
+     20
+    ],
+    "rounds": 6,
+    "request_length": 4000,
+    "output_length": 500,
+    "request_rate": 0.5,
+    "max_parallel": 8,
+    "decision_rate": 0.0,
+    "session_ids": false,
+    "priority": null
+   },
+   "runs": {
+    "20": {
+     "total_requests": 120,
+     "request_rate": 0.5,
+     "average_prompt_len": 15250.0,
+     "average_output_len": 500.0,
+     "p90_prompt_len": 26500,
+     "p99_prompt_len": 26500,
+     "p90_output_len": 500,
+     "p99_output_len": 500,
+     "average_ttft": 5.877431903763985,
+     "p90_ttft": 15.65850602183491,
+     "p99_ttft": 24.272323583252728,
+     "median_ttft": 3.8710767733864486,
+     "max_ttft": 28.614678035024554,
+     "average_tpot": 0.037277074212651036,
+     "p90_tpot": 0.06075846507999757,
+     "p99_tpot": 0.08134406964664156,
+     "median_tpot": 0.03595923108631047,
+     "max_tpot": 0.08265528460695802,
+     "average_itl": 0.11523112849429078,
+     "p90_itl": 0.04686301201581955,
+     "p99_itl": 1.1774086593650281,
+     "median_itl": 0.035945592913776636,
+     "max_itl": 1.2572368630208075,
+     "average_latency": 24.47869193587685,
+     "p90_latency": 43.481446125078946,
+     "p99_latency": 49.475053917150944,
+     "median_latency": 22.356348395813257,
+     "max_latency": 55.19762839702889,
+     "input_token_throughput": 4096.78337327422,
+     "output_token_throughput": 134.32076633685966,
+     "throughput": 0.2686415326737194,
+     "cache_hit_rate": 0.6570666666666667,
+     "decisions": null
+    }
+   }
+  }
+ },
+ "startup_s": 176.06228828430176,
+ "pools": {
+  "version": "0.5.24.dev1123+gabd7532b5",
+  "kv_pool_tokens": 286604,
+  "max_running": 8,
+  "page_size": 1,
+  "context_len": 122880,
+  "model_path": "/home/ubuntu/experiments/inference/models/Swift-1.5-Qwen3.8-27b-INT4",
+  "mamba_slots": 64,
+  "host_kv_tokens": 436704,
+  "host_state_slots": 113,
+  "weights_gb": 9.1,
+  "free_after_init_gb": 1.38
+ },
+ "status": "ok"
+}
