@@ -1,0 +1,34 @@
+# How speed and concurrency change with the per-user context on 2x RTX A4500: the deployed
+# 8-user config (fork-best-ram in studio-swift15-2xa4500.toml), burst at 32k, 64k, 96k and
+# the full 120k. Cells that do not fit in the KV pool are skipped and listed as such.
+#
+#   MODEL=<Swift-1.5 dir> python benchmark/capacity/studio.py run \
+#       benchmark/capacity/configs/studio-context-sweep-2xa4500.toml
+
+launch = "sglang serve"
+port = 30000
+server_args = """
+  --model-path $MODEL --served-model-name local --tp 2 --host 127.0.0.1
+  --kv-cache-dtype fp8_e4m3 --mamba-ssm-dtype bfloat16 --mem-fraction-static 0.87
+  --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+  --chunked-prefill-size 2048 --mamba-radix-cache-strategy extra_buffer_lazy
+  --disable-prefill-cuda-graph --context-length 122880 --max-running-requests 8
+  --cuda-graph-max-bs-decode 8 --enable-mixed-chunk --prefill-decode-interval 4
+  --speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 1
+  --speculative-num-draft-tokens 4 --enable-linear-replayssm-spec
+  --speculative-draft-model-quantization fp8
+  --speculative-token-map benchmark/ampere_qwen38/token_maps/swift15_sharegpt_32k.pt
+  --max-mamba-cache-size 64 --mamba-max-states-per-path 2
+  --enable-hierarchical-cache --hicache-size 12 --hicache-write-policy write_through
+"""
+
+[env]
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK = "1"
+
+[steps.burst]
+args = """--context-lens 32k,64k,96k,full --users 1,2,4,8 --repeats 1
+  --sampling-params '{"temperature":1.0,"top_p":0.95,"top_k":20}'"""
+
+[[configs]]
+name = "s64-path2-hicache"

@@ -564,3 +564,32 @@ same box with `fork-best-ram`'s flags: 8 users at 32k (3 repeats), then 20 sessi
 - **Next check if it matters:** `configs/studio-ab-replay-2xa4500.toml` replays the 20
   sessions one request at a time in a fixed order (`ready_queue_policy = "fifo"`), which
   takes arrival timing out. Not run yet.
+
+## Speed against context length, 2026-11-10 (`results/2xa4500-context-sweep`)
+
+The deployed 8-user config (`s64-path2-hicache`: 64 GDN slots, path cap 2, HiCache 12 GB/GPU,
+pool 286,604 tokens), burst at 32k / 64k / 96k / full (122,362) with 1 / 2 / 4 / 8 users,
+512 decode tokens, temperature 1.0 / top_p 0.95 / top_k 20, one repeat
+(`configs/studio-context-sweep-2xa4500.toml`). Counts that do not fit the pool were skipped.
+
+| Context | Users | TTFT 1st / last (s) | Prefill tok/s, all | Decode tok/s per user | Total | While others prefill | Accept |
+|---|---|---|---|---|---|---|---|
+| 32,768 | 1 | 16.66 | 1,967 | 142.8 | 142.8 | - | 3.48 |
+| 32,768 | 2 | 16.87 / 36.05 | 1,818 | 81.2 | 162.3 | 8.6 | 2.25 |
+| 32,768 | 4 | 17.41 / 76.16 | 1,721 | 76.5 | 305.9 | 10.6 | 2.80 |
+| 32,768 | 8 | 17.41 / 159.97 | 1,639 | 61.8 | 494.7 | 10.3 | 4.01 |
+| 65,536 | 1 | 40.07 | 1,636 | 108.7 | 108.7 | - | 2.96 |
+| 65,536 | 2 | 40.01 / 85.03 | 1,542 | 100.3 | 200.7 | 9.7 | 3.23 |
+| 65,536 | 4 | 40.04 / 178.29 | 1,470 | 63.7 | 254.6 | 8.2 | 2.79 |
+| 98,304 | 1 | 67.89 | 1,448 | 87.2 | 87.2 | - | 2.59 |
+| 98,304 | 2 | 67.89 / 144.68 | 1,359 | 92.9 | 185.8 | 8.6 | 3.39 |
+| 122,362 | 1 | 91.82 | 1,333 | 75.0 | 75.0 | - | 2.37 |
+| 120,314 | 2 | 89.90 / 191.20 | 1,259 | 69.6 | 139.3 | 8.2 | 3.05 |
+
+- **The pool formula holds.** floor(286,604 / (L + max_new)) users ran together at every
+  length: 8 at 32k (running-request cap), 4 at 64k, 2 at 96k and full.
+- **Prefill slows with length:** 1,967 -> 1,333 tok/s from 32k to 122k, so a cold 122k prompt
+  takes 92 s (5.5x the 32k time for 3.7x the tokens).
+- **Decode per verify round slows about 23% with depth** (1 user, tok/s / accept: 41.0 at
+  32k, 36.7 at 64k, 33.7 at 96k, 31.6 at 122k). Raw tok/s also moves with acceptance.
+- **Running users get 8-10 tok/s while another prompt prefills**, at every length.

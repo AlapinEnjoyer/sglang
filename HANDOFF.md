@@ -465,6 +465,10 @@ Reproduce with `benchmark/capacity/configs/studio-swift15-2xa4500.toml`.
     this VM's 131 MB/s disk. Cold prefill is about 16 s.
   - It needs `libssl-dev`, `--page-size 64` (page 1 writes a file per token) and
     `--hicache-storage-prefetch-policy wait_complete` (the default drops slow restores).
+- **Speed against context length** (RESULTS "Speed against context length", 2026-11-10).
+  With the deployed 8-user config every user count the pool allows ran together (8 at 32k,
+  4 at 64k, 2 at 96k and 122k). Cold prefill takes 17 / 40 / 68 / 92 s at 32k / 64k / 96k /
+  122k, and one user decodes at 143 / 109 / 87 / 75 tok/s.
 - **The decode gain is mostly the token map.** About three quarters of it is the map plus the
   FP8 draft. The map is lossless, but it was built from English ShareGPT. Build one from your
   own traffic (`build_token_map.py`) when the text differs, and compare acceptance.
